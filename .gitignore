@@ -1,24 +1,94 @@
-# Compiled class file
-*.class
-
-# Log file
+# ==========================================
+# 1. PROTEUS DESIGN SUITE
+# ==========================================
+# Respaldos automáticos y archivos de trabajo local
+*.pdsbak
+*.pdsbak.*
+*.workspace
+*.tmp
 *.log
+Last\ Loaded\ *.pdsprj
 
-# BlueJ files
-*.ctxt
+# ==========================================
+# 2. SIMULIDE
+# ==========================================
+# Respaldos de circuito y temporales
+*.simu.bak
+*.simu~
+*.bak
+*~
+*.layout
+*.simulide/
+simulide.log
 
-# Mobile Tools for Java (J2ME)
-.mtj.tmp/
+# ==========================================
+# 3. COMPILADORES EMBEBIDOS (AVR-GCC, XC8, SDCC, KEIL)
+# ==========================================
+# Archivos objeto e intermedios de compilación
+*.o
+*.obj
+*.d
+*.lst
+*.map
+*.lss
+*.s
+*.crf
+*.build_log.htm
+*.eep
 
-# Package Files #
+# REGLA CLAVE: Mantener rastreado el ejecutable necesario para simular en Proteus/SimulIDE
+!*.hex
+!*.elf
+!*.bin
+
+# ==========================================
+# 4. JAVA & APACHE MAVEN
+# ==========================================
+target/
+*.class
 *.jar
 *.war
-*.nar
 *.ear
+*.nar
 *.zip
 *.tar.gz
 *.rar
 
-# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
-hs_err_pid*
-replay_pid*
+# ==========================================
+# 5. IDES (NETBEANS, INTELLIJ, VS CODE, ECLIPSE)
+# ==========================================
+# NetBeans
+nbproject/private/
+build/
+nbbuild/
+dist/
+nbdist/
+.nb-gradle/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Visual Studio Code
+.vscode/
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# ==========================================
+# 6. ARCHIVOS DE SISTEMA OPERATIVO
+# ==========================================
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
