@@ -1,23 +1,21 @@
 package com.laboratorio;
 
+import com.laboratorio.controller.SerialCommunicationManager;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 
 public class App {
 
     public static void main(String[] args) {
-        // Look & Feel nativo del sistema operativo
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
         } catch (Exception ignored) {
         }
 
-        // Ejecucion en el hilo de interfaz Swing (EDT)
         SwingUtilities.invokeLater(() -> {
-            System.out.println("=================================================");
-            System.out.println(" Laboratorio 2 - Comunicacion Serial Iniciada    ");
-            System.out.println("=================================================");
-            // Aqui se instanciara VentanaPrincipal y SerialCommunicationManager
+            // Instanciar el gestor de comunicacion serial y correr prueba de Tarea #15
+            SerialCommunicationManager serialManager = new SerialCommunicationManager();
+            serialManager.ejecutarDiagnosticoPuertos();
         });
     }
 }
