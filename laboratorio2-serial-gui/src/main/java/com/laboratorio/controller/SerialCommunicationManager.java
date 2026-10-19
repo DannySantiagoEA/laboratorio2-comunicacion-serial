@@ -1,15 +1,22 @@
 package com.laboratorio.controller;
 
 import com.fazecast.jSerialComm.SerialPort;
+import com.fazecast.jSerialComm.SerialPortDataListener;
+import com.fazecast.jSerialComm.SerialPortEvent;
 import com.fazecast.jSerialComm.SerialPortInvalidPortException;
+import com.laboratorio.model.TramaTelemetria;
+import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
  * Controlador de comunicación serial utilizando la API jSerialComm. - Tarea
  * #15: Integración de librería y detección de puertos COM virtuales. - Tarea
  * #16: Configuración de parámetros seriales (9600, 8-N-1), apertura/cierre
- * seguro del descriptor de puerto y manejo de excepciones.
+ * seguro del descriptor de puerto y manejo de excepciones. - Tarea #17:
+ * Escuchador SerialPortDataListener (LISTENING_EVENT_DATA_AVAILABLE) y parser
+ * de trama continua (cabecera 0x7A 0x7B, byte digital, 8 ADC y cola 0x7C).
  */
 public class SerialCommunicationManager {
 
@@ -22,29 +29,80 @@ public class SerialCommunicationManager {
     public static final int DEFAULT_STOP_BITS = SerialPort.ONE_STOP_BIT;
     public static final int DEFAULT_PARITY = SerialPort.NO_PARITY;
 
+    // Delimitadores de sincronismo de la trama continua (Tarea #17)
+    public static final byte HEADER_BYTE_1 = (byte) 0x7A;
+    public static final byte HEADER_BYTE_2 = (byte) 0x7B;
+    public static final byte TAIL_BYTE = (byte) 0x7C;
+
+    // Dimensiones del protocolo
+    public static final int NUM_CANALES_DIGITALES = 4;
+    public static final int NUM_CANALES_ANALOGICOS = 8;
+    public static final double VOLTAJE_REFERENCIA = 5.0;
+
+    // Longitud total de trama según resolución ADC:
+    // - Modo 8 bits (1 byte por canal): 2 (Header) + 1 (Dig) + 8 (ADC) + 1 (Tail) = 12 bytes
+    // - Modo 10 bits (2 bytes por canal): 2 (Header) + 1 (Dig) + 16 (ADC) + 1 (Tail) = 20 bytes
+    public static final int LONGITUD_TRAMA_8_BITS = 12;
+    public static final int LONGITUD_TRAMA_10_BITS = 20;
+
     // Descriptor del puerto serial actualmente en uso
     private SerialPort puertoActivo;
 
+    // Buffer acumulador para reconstruir tramas fragmentadas en recepción asíncrona
+    private final ByteArrayOutputStream bufferRecepcion = new ByteArrayOutputStream();
+
+    // Configuración de resolución ADC (false = 8 bits [12 bytes], true = 10 bits [20 bytes])
+    private boolean modoAdc10Bits = false;
+
+    // Contadores de diagnóstico del parser
+    private long tramasValidasRecibidas = 0;
+    private long bytesDescartadosPorRuido = 0;
+
+    // Callback para entregar cada trama decodificada al controlador / GUI
+    private TramaRecibidaListener listenerTrama;
+
+    /**
+     * Interfaz funcional para notificar de forma asíncrona cada vez que el
+     * parser valida y desempaqueta una trama completa (0x7A 0x7B ... 0x7C).
+     */
+    @FunctionalInterface
+    public interface TramaRecibidaListener {
+
+        void onTramaValida(TramaTelemetria trama);
+    }
+
     public SerialCommunicationManager() {
-        // Gancho de seguridad (Shutdown Hook): asegura que el puerto COM se libere
-        // en Windows incluso si la aplicación se cierra abruptamente.
         Runtime.getRuntime().addShutdownHook(new Thread(this::desconectar));
+    }
+
+    public void setTramaRecibidaListener(TramaRecibidaListener listener) {
+        this.listenerTrama = listener;
+    }
+
+    /**
+     * Define si el parser debe esperar 8 bytes analógicos (ADC 8 bits -> trama
+     * de 12 bytes) o 16 bytes analógicos (ADC 10 bits -> trama de 20 bytes).
+     */
+    public synchronized void setModoAdc10Bits(boolean usar10Bits) {
+        this.modoAdc10Bits = usar10Bits;
+        this.bufferRecepcion.reset();
+    }
+
+    public synchronized boolean isModoAdc10Bits() {
+        return modoAdc10Bits;
+    }
+
+    public synchronized int getLongitudTramaEsperada() {
+        return modoAdc10Bits ? LONGITUD_TRAMA_10_BITS : LONGITUD_TRAMA_8_BITS;
     }
 
     // =========================================================================
     // MÉTODOS DE DETECCIÓN Y ESCANEO (TAREA #15)
     // =========================================================================
-    /**
-     * Obtiene el arreglo nativo de descriptores SerialPort detectados en el SO.
-     */
     public SerialPort[] obtenerDescriptoresPuertos() {
         return SerialPort.getCommPorts();
     }
 
-    /**
-     * Retorna una lista con los nombres de sistema de todos los puertos COM
-     * activos (ej. ["COM1", "COM2"]).
-     */
     public List<String> obtenerNombresPuertosDisponibles() {
         SerialPort[] puertos = SerialPort.getCommPorts();
         List<String> nombres = new ArrayList<>();
@@ -54,10 +112,6 @@ public class SerialCommunicationManager {
         return nombres;
     }
 
-    /**
-     * Comprueba si un puerto específico (ej. "COM2") se encuentra activo y
-     * reconocido por el sistema operativo.
-     */
     public boolean existePuerto(String nombrePuerto) {
         if (nombrePuerto == null || nombrePuerto.isBlank()) {
             return false;
@@ -73,99 +127,65 @@ public class SerialCommunicationManager {
     // =========================================================================
     // MÉTODOS DE APERTURA, CONFIGURACIÓN Y CIERRE SEGURO (TAREA #16)
     // =========================================================================
-    /**
-     * Sobrecarga que abre el puerto indicado usando los parámetros estándar del
-     * laboratorio (9600 bps, 8 bits de datos, 1 bit de parada, sin paridad).
-     *
-     * @param nombrePuerto Identificador del puerto (ej. "COM2").
-     * @throws SerialConnectionException Si el puerto no existe, está ocupado o
-     * falla su apertura.
-     */
     public synchronized void conectar(String nombrePuerto) throws SerialConnectionException {
         conectar(nombrePuerto, DEFAULT_BAUD_RATE, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, DEFAULT_PARITY);
     }
 
-    /**
-     * Sobrecarga que permite especificar el puerto y la velocidad en baudios,
-     * manteniendo la trama 8-N-1.
-     *
-     * @param nombrePuerto Identificador del puerto (ej. "COM2").
-     * @param baudRate Velocidad de transmisión (ej. 9600 o 115200).
-     * @throws SerialConnectionException Si el puerto no existe, está ocupado o
-     * falla su apertura.
-     */
     public synchronized void conectar(String nombrePuerto, int baudRate) throws SerialConnectionException {
         conectar(nombrePuerto, baudRate, DEFAULT_DATA_BITS, DEFAULT_STOP_BITS, DEFAULT_PARITY);
     }
 
-    /**
-     * Tarea #16: Configura los parámetros de comunicación serial y abre de
-     * forma segura el descriptor del puerto manejando posibles excepciones.
-     *
-     * @param nombrePuerto Identificador del sistema (ej. "COM2").
-     * @param baudRate Tasa de baudios (ej. 9600).
-     * @param dataBits Bits de datos por trama (8).
-     * @param stopBits Bits de parada (SerialPort.ONE_STOP_BIT).
-     * @param parity Paridad (SerialPort.NO_PARITY).
-     * @throws SerialConnectionException Si ocurre un error de validación o
-     * acceso nativo.
-     */
     public synchronized void conectar(String nombrePuerto, int baudRate, int dataBits, int stopBits, int parity)
             throws SerialConnectionException {
 
-        // 1. Validar entrada nula o vacía
         if (nombrePuerto == null || nombrePuerto.isBlank()) {
             throw new SerialConnectionException("Debe especificar un nombre de puerto COM válido (ej. COM2).");
         }
         String puertoLimpio = nombrePuerto.trim().toUpperCase();
 
-        // 2. Validar tasa de baudios
         if (baudRate <= 0) {
             throw new SerialConnectionException("La velocidad en baudios debe ser mayor que 0 bps.");
         }
 
-        // 3. Verificar si ya nos encontramos conectados a ese mismo puerto
         if (isConectado() && puertoActivo.getSystemPortName().equalsIgnoreCase(puertoLimpio)) {
             throw new SerialConnectionException("El puerto " + puertoLimpio + " ya se encuentra abierto en esta sesión.");
         }
 
-        // 4. Si había otro puerto distinto abierto previamente, cerrarlo con seguridad
         if (isConectado()) {
             desconectar();
         }
 
-        // 5. Verificar que el puerto realmente exista en la enumeración del sistema operativo
         if (!existePuerto(puertoLimpio)) {
             throw new SerialConnectionException(
                     "El puerto '" + puertoLimpio + "' no existe o fue desconectado del sistema.");
         }
 
         try {
-            // 6. Obtener el descriptor nativo del puerto
             SerialPort candidato = SerialPort.getCommPort(puertoLimpio);
 
-            // 7. Configurar parámetros seriales: 9600 bps, 8 DataBits, 1 StopBit, Parity None
             boolean paramsOk = candidato.setComPortParameters(baudRate, dataBits, stopBits, parity);
             if (!paramsOk) {
                 throw new SerialConnectionException(
                         "No se pudieron aplicar los parámetros seriales (8-N-1) en " + puertoLimpio + ".");
             }
 
-            // 8. Configurar Timeouts en modo no bloqueante para lectura asíncrona por eventos
             candidato.setComPortTimeouts(SerialPort.TIMEOUT_NONBLOCKING, 0, 0);
 
-            // 9. Limpiar buffers de hardware (RX/TX) antes de abrir y abrir el puerto
             boolean abierto = candidato.openPort();
             if (!abierto) {
                 throw new SerialConnectionException(
                         "No fue posible abrir el puerto " + puertoLimpio
-                        + ". Verifique que no esté ocupado por otra aplicación (ej. Proteus u otro monitor serial).");
+                        + ". Verifique que no esté ocupado por otra aplicación.");
             }
 
             candidato.flushIOBuffers();
             this.puertoActivo = candidato;
+            this.bufferRecepcion.reset();
 
-            System.out.printf("[OK #16] Puerto %s abierto exitosamente (%d bps, %d-N-%d).%n",
+            // Tarea #17: Registrar el escuchador asíncrono al abrir el puerto
+            registrarEscuchadorDatosAsincrono();
+
+            System.out.printf("[OK #16/#17] Puerto %s abierto (%d bps, %d-N-%d) con Listener activo.%n",
                     puertoActivo.getSystemPortName(),
                     puertoActivo.getBaudRate(),
                     puertoActivo.getNumDataBits(),
@@ -185,13 +205,6 @@ public class SerialCommunicationManager {
         }
     }
 
-    /**
-     * Tarea #16: Cierra de manera segura el descriptor del puerto activo,
-     * remueve listeners y libera el recurso en el sistema operativo.
-     *
-     * @return true si el puerto estaba abierto y se cerró correctamente; false
-     * si ya estaba cerrado.
-     */
     public synchronized boolean desconectar() {
         if (puertoActivo == null) {
             return false;
@@ -199,7 +212,6 @@ public class SerialCommunicationManager {
 
         String nombre = puertoActivo.getSystemPortName();
         try {
-            // Remover cualquier listener asíncrono registrado antes de cerrar
             puertoActivo.removeDataListener();
 
             if (puertoActivo.isOpen()) {
@@ -207,8 +219,6 @@ public class SerialCommunicationManager {
                 boolean cerrado = puertoActivo.closePort();
                 if (cerrado) {
                     System.out.println("[OK #16] Puerto " + nombre + " cerrado y liberado de forma segura.");
-                } else {
-                    System.err.println("[AVISO #16] El sistema reportó demora al liberar el puerto " + nombre + ".");
                 }
                 return cerrado;
             }
@@ -218,29 +228,18 @@ public class SerialCommunicationManager {
             return false;
         } finally {
             puertoActivo = null;
+            bufferRecepcion.reset();
         }
     }
 
-    /**
-     * Verifica en tiempo real si el puerto sigue abierto y disponible.
-     *
-     * @return true si el descriptor es válido y permanece abierto.
-     */
     public synchronized boolean isConectado() {
         return puertoActivo != null && puertoActivo.isOpen();
     }
 
-    /**
-     * Retorna el nombre del puerto actualmente conectado o "DESCONECTADO" si no
-     * hay sesión.
-     */
     public synchronized String getNombrePuertoActivo() {
         return isConectado() ? puertoActivo.getSystemPortName() : "DESCONECTADO";
     }
 
-    /**
-     * Retorna un resumen técnico de la configuración actual del puerto.
-     */
     public synchronized String obtenerResumenConfiguracion() {
         if (!isConectado()) {
             return "Sin conexión activa.";
@@ -270,7 +269,162 @@ public class SerialCommunicationManager {
     }
 
     // =========================================================================
-    // DIAGNÓSTICO INTEGRAL DE PRUEBA (TAREAS #15 y #16)
+    // ESCUCHADOR ASÍNCRONO Y PARSER DE TRAMA CONTINUA (TAREA #17)
+    // =========================================================================
+    /**
+     * Tarea #17: Registra el SerialPortDataListener en modo
+     * LISTENING_EVENT_DATA_AVAILABLE. Se ejecuta en un hilo independiente
+     * gestionado por jSerialComm sin bloquear el EDT.
+     */
+    private void registrarEscuchadorDatosAsincrono() {
+        puertoActivo.addDataListener(new SerialPortDataListener() {
+            @Override
+            public int getListeningEvents() {
+                return SerialPort.LISTENING_EVENT_DATA_AVAILABLE;
+            }
+
+            @Override
+            public void serialEvent(SerialPortEvent event) {
+                if (event.getEventType() != SerialPort.LISTENING_EVENT_DATA_AVAILABLE) {
+                    return;
+                }
+                if (puertoActivo == null || !puertoActivo.isOpen()) {
+                    return;
+                }
+
+                int disponibles = puertoActivo.bytesAvailable();
+                if (disponibles <= 0) {
+                    return;
+                }
+
+                byte[] bloqueEntrante = new byte[disponibles];
+                int leidos = puertoActivo.readBytes(bloqueEntrante, bloqueEntrante.length);
+                if (leidos > 0) {
+                    procesarFlujoBytes(bloqueEntrante, leidos);
+                }
+            }
+        });
+    }
+
+    /**
+     * Tarea #17: Algoritmo de búsqueda de delimitadores de sincronismo (0x7A,
+     * 0x7B), verificación de cola (0x7C) y tolerancia a fragmentación o ruido
+     * en la línea.
+     *
+     * @param nuevosBytes Arreglo de bytes recién leídos del puerto serial.
+     * @param cantidad Número efectivo de bytes leídos.
+     */
+    public synchronized void procesarFlujoBytes(byte[] nuevosBytes, int cantidad) {
+        if (nuevosBytes == null || cantidad <= 0) {
+            return;
+        }
+
+        // 1. Anexar los nuevos bytes al buffer acumulador
+        bufferRecepcion.write(nuevosBytes, 0, cantidad);
+        byte[] buffer = bufferRecepcion.toByteArray();
+
+        int longitudTrama = getLongitudTramaEsperada();
+        int cursor = 0;
+
+        // 2. Recorrer el buffer mientras existan suficientes bytes para al menos una trama completa
+        while (cursor <= buffer.length - longitudTrama) {
+            // Verificar coincidencia de la cabecera doble: 0x7A seguido de 0x7B
+            if (buffer[cursor] == HEADER_BYTE_1 && buffer[cursor + 1] == HEADER_BYTE_2) {
+                int posicionCola = cursor + longitudTrama - 1;
+
+                // Verificar si el byte de cierre en la posición esperada es 0x7C
+                if (buffer[posicionCola] == TAIL_BYTE) {
+                    byte[] tramaCompleta = Arrays.copyOfRange(buffer, cursor, cursor + longitudTrama);
+                    TramaTelemetria objetoTrama = desempaquetarTrama(tramaCompleta);
+
+                    if (listenerTrama != null) {
+                        listenerTrama.onTramaValida(objetoTrama);
+                    }
+
+                    // Saltar exactamente al final de esta trama válida
+                    cursor += longitudTrama;
+                } else {
+                    // Cabecera falsa (coincidencia de datos con 0x7A 0x7B) o trama corrupta:
+                    // avanzar 1 byte para buscar el siguiente sincronismo real
+                    bytesDescartadosPorRuido++;
+                    cursor++;
+                }
+            } else {
+                // Byte fuera de sincronismo (ruido o residuo previo): descartar y avanzar
+                bytesDescartadosPorRuido++;
+                cursor++;
+            }
+        }
+
+        // 3. Conservar en el acumulador únicamente el fragmento final incompleto (si lo hay)
+        bufferRecepcion.reset();
+        if (cursor < buffer.length) {
+            bufferRecepcion.write(buffer, cursor, buffer.length - cursor);
+        }
+    }
+
+    /**
+     * Tarea #17: Desempaqueta una trama validada extrayendo el byte de 4
+     * entradas digitales y reconstruyendo las 8 lecturas de voltaje ADC (0.0 V
+     * a 5.0 V).
+     *
+     * @param trama Arreglo de bytes validado con cabecera [0x7A, 0x7B] y fin
+     * [0x7C].
+     * @return Instancia inmutable de TramaTelemetria con datos crudos y
+     * escalados.
+     */
+    private TramaTelemetria desempaquetarTrama(byte[] trama) {
+        tramasValidasRecibidas++;
+
+        // 1. Extraer byte digital (posición 2) y desempaquetar los 4 bits del DIP-Switch (b0..b3)
+        byte byteDigital = trama[2];
+        int[] estadosDigitales = new int[NUM_CANALES_DIGITALES];
+        for (int i = 0; i < NUM_CANALES_DIGITALES; i++) {
+            estadosDigitales[i] = (byteDigital >> i) & 0x01;
+        }
+
+        // 2. Extraer y escalar los 8 canales analógicos ADC
+        int[] cuentasAdc = new int[NUM_CANALES_ANALOGICOS];
+        double[] voltajes = new double[NUM_CANALES_ANALOGICOS];
+
+        if (!modoAdc10Bits) {
+            // Modo 8 bits: 1 byte sin signo por canal (posiciones 3 a 10), rango 0..255 -> 0.0..5.0 V
+            for (int ch = 0; ch < NUM_CANALES_ANALOGICOS; ch++) {
+                int valor8Bits = trama[3 + ch] & 0xFF;
+                cuentasAdc[ch] = valor8Bits;
+                voltajes[ch] = (valor8Bits * VOLTAJE_REFERENCIA) / 255.0;
+            }
+        } else {
+            // Modo 10 bits: 2 bytes por canal [MSB, LSB] (posiciones 3 a 18), rango 0..1023 -> 0.0..5.0 V
+            for (int ch = 0; ch < NUM_CANALES_ANALOGICOS; ch++) {
+                int offset = 3 + (ch * 2);
+                int msb = trama[offset] & 0xFF;
+                int lsb = trama[offset + 1] & 0xFF;
+                int valor10Bits = ((msb << 8) | lsb) & 0x03FF;
+                cuentasAdc[ch] = valor10Bits;
+                voltajes[ch] = (valor10Bits * VOLTAJE_REFERENCIA) / 1023.0;
+            }
+        }
+
+        return new TramaTelemetria(
+                tramasValidasRecibidas,
+                byteDigital,
+                estadosDigitales,
+                cuentasAdc,
+                voltajes
+        );
+    }
+
+    public synchronized long getTramasValidasRecibidas() {
+        return tramasValidasRecibidas;
+    }
+
+    public synchronized long getBytesDescartadosPorRuido() {
+        return bytesDescartadosPorRuido;
+    }
+
+    // =========================================================================
+    // DIAGNÓSTICO DE PUERTOS (TAREA #15)
     // =========================================================================
     public void ejecutarDiagnosticoPuertos() {
         System.out.println("=================================================================");
