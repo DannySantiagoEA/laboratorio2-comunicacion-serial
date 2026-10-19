@@ -3,7 +3,6 @@ package com.laboratorio;
 import com.fazecast.jSerialComm.SerialPort;
 import com.laboratorio.controller.SerialCommunicationManager;
 import com.laboratorio.controller.SerialConnectionException;
-import java.util.Arrays;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 
@@ -20,78 +19,89 @@ public class App {
             serialManager.ejecutarDiagnosticoPuertos();
 
             System.out.println("\n=================================================================");
-            System.out.println("  PRUEBA TAREA #17 - LISTENER ASINCRONO Y PARSER (COM1 -> COM2)  ");
+            System.out.println("  PRUEBA TAREA #18 - DESPACHO DE COMANDOS (COM2 -> COM1)         ");
             System.out.println("=================================================================");
 
-            // 1. Registrar el callback que recibirá las tramas ya desempaquetadas
-            serialManager.setTramaRecibidaListener(trama -> {
-                System.out.println("\n   >>> [EVENTO ASINCRONO RECIBIDO EN COM2] <<<");
-                System.out.println("   " + trama);
-                System.out.println("   -> Estados DIP-Switch (SW1..SW4): "
-                        + Arrays.toString(trama.getEstadosDigitalesBoolean()));
-                System.out.println("   -> Cuentas ADC crudas (AN0..AN7): "
-                        + Arrays.toString(trama.getCuentasAdc()));
-            });
-
-            SerialPort emuladorProteusCOM1 = null;
+            SerialPort receptorProteusCOM1 = null;
             try {
-                // 2. Abrir COM2 con nuestro SerialCommunicationManager (Receptor Java)
+                // 1. Abrir COM2 desde nuestro controlador Java
                 serialManager.conectar("COM2", 9600);
 
-                // 3. Abrir COM1 para simular el envío desde Proteus a través del puente HHD
-                emuladorProteusCOM1 = SerialPort.getCommPort("COM1");
-                emuladorProteusCOM1.setComPortParameters(9600, 8, SerialPort.ONE_STOP_BIT, SerialPort.NO_PARITY);
-                if (emuladorProteusCOM1.openPort()) {
-                    System.out.println("[SIMULADOR] COM1 abierto como transmisor (emulando Proteus).");
+                // 2. Abrir COM1 simulando el buffer UART RX del microcontrolador en Proteus
+                receptorProteusCOM1 = SerialPort.getCommPort("COM1");
+                receptorProteusCOM1.setComPortParameters(9600, 8, SerialPort.ONE_STOP_BIT, SerialPort.NO_PARITY);
+                receptorProteusCOM1.openPort();
 
-                    // --- PRUEBA A: Enviar basura previa + Trama #1 completa ---
-                    // Switches: 0x05 (0000 0101 -> SW1=ON, SW2=OFF, SW3=ON, SW4=OFF)
-                    // 8 Canales ADC: 0 (0.0V), 51 (1.0V), 102 (2.0V), 128 (2.51V),
-                    //                153 (3.0V), 204 (4.0V), 230 (4.51V), 255 (5.0V)
-                    byte[] rafaga1 = new byte[]{
-                        (byte) 0xFF, (byte) 0x00, (byte) 0x13, // 3 bytes de ruido previo
-                        (byte) 0x7A, (byte) 0x7B, // Cabecera oficial
-                        (byte) 0x05, // Byte digital (SW1 y SW3 en 1)
-                        (byte) 0, (byte) 51, (byte) 102, (byte) 128,
-                        (byte) 153, (byte) 204, (byte) 230, (byte) 255, // 8 bytes ADC
-                        (byte) 0x7C // Fin de trama
-                    };
-                    System.out.println("\n>> [Envio 1] Transmitiendo 3 bytes de ruido + Trama #1 por COM1...");
-                    emuladorProteusCOM1.writeBytes(rafaga1, rafaga1.length);
-                    Thread.sleep(250); // Dar tiempo al hilo asíncrono de jSerialComm
+                // --- PRUEBA 1: Enviar comando de LEDs con máscara byte (LED 1 y LED 3 encendidos -> 0b0101 = 0x05) ---
+                System.out.println("\n>> [Prueba 1] Enviando comando LEDs (Mascara 0x05 -> LED1=ON, LED2=OFF, LED3=ON, LED4=OFF)...");
+                serialManager.enviarComandoLeds((byte) 0b00000101);
+                Thread.sleep(100);
+                leerYVerificarEnCOM1(receptorProteusCOM1);
 
-                    // --- PRUEBA B: Enviar Trama #2 FRAGMENTADA en dos partes ---
-                    // Switches: 0x0A (0000 1010 -> SW1=OFF, SW2=ON, SW3=OFF, SW4=ON)
-                    byte[] parte1 = new byte[]{
-                        (byte) 0x7A, (byte) 0x7B, (byte) 0x0A, (byte) 255, (byte) 128
-                    };
-                    byte[] parte2 = new byte[]{
-                        (byte) 64, (byte) 32, (byte) 16, (byte) 8, (byte) 4, (byte) 0, (byte) 0x7C
-                    };
-                    System.out.println("\n>> [Envio 2] Transmitiendo Trama #2 fragmentada en 2 partes por COM1...");
-                    emuladorProteusCOM1.writeBytes(parte1, parte1.length);
-                    Thread.sleep(100);
-                    emuladorProteusCOM1.writeBytes(parte2, parte2.length);
-                    Thread.sleep(250);
+                // --- PRUEBA 2: Enviar comando de LEDs con arreglo booleano (LED 2 y LED 4 encendidos -> 0b1010 = 0x0A) ---
+                System.out.println("\n>> [Prueba 2] Enviando comando LEDs desde arreglo booleano [false, true, false, true]...");
+                serialManager.enviarComandoLeds(new boolean[]{false, true, false, true});
+                Thread.sleep(100);
+                leerYVerificarEnCOM1(receptorProteusCOM1);
 
-                    System.out.println("\n-----------------------------------------------------------------");
-                    System.out.println(">> Resumen Diagnostico Parser (#17):");
-                    System.out.println("   - Tramas validas decodificadas : " + serialManager.getTramasValidasRecibidas());
-                    System.out.println("   - Bytes de ruido descartados   : " + serialManager.getBytesDescartadosPorRuido());
-                    System.out.println("-----------------------------------------------------------------");
-                } else {
-                    System.err.println("[AVISO] No se pudo abrir COM1 para el autodiagnóstico.");
+                // --- PRUEBA 3: Enviar comando de tiempo de muestreo Ts = 250 ms (0x00FA) ---
+                System.out.println("\n>> [Prueba 3] Enviando comando de cambio de muestreo Ts = 250 ms...");
+                serialManager.enviarComandoMuestreo(250);
+                Thread.sleep(100);
+                leerYVerificarEnCOM1(receptorProteusCOM1);
+
+                // --- PRUEBA 4: Enviar comando de tiempo de muestreo Ts = 1000 ms (0x03E8) ---
+                System.out.println("\n>> [Prueba 4] Enviando comando de cambio de muestreo Ts = 1000 ms...");
+                serialManager.enviarComandoMuestreo(1000);
+                Thread.sleep(100);
+                leerYVerificarEnCOM1(receptorProteusCOM1);
+
+                // --- PRUEBA 5: Validación defensiva ante un Ts inválido (ej. -50 ms) ---
+                System.out.println("\n>> [Prueba 5] Probando rechazo defensivo con Ts invalido (-50 ms)...");
+                try {
+                    serialManager.enviarComandoMuestreo(-50);
+                } catch (SerialConnectionException ex) {
+                    System.out.println("   [EXCEPCION CAPTURADA OK]: " + ex.getMessage());
                 }
+
+                System.out.println("\n-----------------------------------------------------------------");
+                System.out.println(">> Total de tramas de comando despachadas con exito (#18): "
+                        + serialManager.getComandosEnviados());
+                System.out.println("-----------------------------------------------------------------");
 
             } catch (SerialConnectionException | InterruptedException ex) {
                 System.err.println("[ERROR]: " + ex.getMessage());
             } finally {
-                if (emuladorProteusCOM1 != null && emuladorProteusCOM1.isOpen()) {
-                    emuladorProteusCOM1.closePort();
+                if (receptorProteusCOM1 != null && receptorProteusCOM1.isOpen()) {
+                    receptorProteusCOM1.closePort();
                 }
                 serialManager.desconectar();
                 System.out.println("=================================================================");
             }
         });
+    }
+
+    /**
+     * Lee los bytes que llegaron al puerto COM1 (extremo de Proteus) y
+     * comprueba la integridad del protocolo [0xAA ... 0x55].
+     */
+    private static void leerYVerificarEnCOM1(SerialPort com1) {
+        int disponibles = com1.bytesAvailable();
+        if (disponibles <= 0) {
+            System.out.println("   [COM1 RX] Sin bytes recibidos.");
+            return;
+        }
+        byte[] recibidos = new byte[disponibles];
+        com1.readBytes(recibidos, recibidos.length);
+
+        System.out.println("   [COM1 RX <- Microcontrolador recibe]: "
+                + SerialCommunicationManager.formatearHex(recibidos));
+
+        // Si es un comando de muestreo (0x02), reconstruir el Ts de 16 bits como lo hará Brayan en C
+        if (recibidos.length == 5 && recibidos[0] == (byte) 0xAA
+                && recibidos[1] == (byte) 0x02 && recibidos[4] == (byte) 0x55) {
+            int tsReconstruido = ((recibidos[2] & 0xFF) << 8) | (recibidos[3] & 0xFF);
+            System.out.println("   [COM1 RX] -> Ts reconstruido en 16 bits por el micro: " + tsReconstruido + " ms");
+        }
     }
 }
