@@ -49,18 +49,18 @@ public class ControladorAdquisicion {
     private int canalAnalogicoActivo = 0;
     private int canalDigitalActivo = 0;
 
-    // Nombres de canales para modo serial (8 ADC y 4 DIP-Switch del Arduino de Brayan)
+    // Nombres de canales sincronizados con el esquemático de Proteus (ATmega328P)
     private static final String[] NOMBRES_ADC_SERIAL = {
-        "Canal ADC 1 (A0 - Pot 1)", "Canal ADC 2 (A1 - Pot 2)",
-        "Canal ADC 3 (A2 - Pot 3)", "Canal ADC 4 (A3 - Pot 4)",
-        "Canal ADC 5 (A4 - Pot 5)", "Canal ADC 6 (A5 - Pot 6)",
-        "Canal ADC 7 (A6 - Pot 7)", "Canal ADC 8 (A7 - Pot 8)"
+        "Canal ADC 1 (AN0 - RV1)", "Canal ADC 2 (AN1 - RV2)",
+        "Canal ADC 3 (AN2 - RV3)", "Canal ADC 4 (AN3 - RV4)",
+        "Canal ADC 5 (AN4 - RV5)", "Canal ADC 6 (AN5 - RV6)",
+        "Canal ADC 7 (AN6 - RV7)", "Canal ADC 8 (AN7 - RV8)"
     };
     private static final String[] NOMBRES_DIP_SERIAL = {
-        "Entrada Digital 1 (DIP-SW1 / Pin 22)",
-        "Entrada Digital 2 (DIP-SW2 / Pin 23)",
-        "Entrada Digital 3 (DIP-SW3 / Pin 24)",
-        "Entrada Digital 4 (DIP-SW4 / Pin 25)"
+        "Entrada Digital 1 (DSW1-1 / Pin PD4)",
+        "Entrada Digital 2 (DSW1-2 / Pin PD5)",
+        "Entrada Digital 3 (DSW1-3 / Pin PD6)",
+        "Entrada Digital 4 (DSW1-4 / Pin PD7)"
     };
 
     // Búferes sincronizados en memoria para exportación (Tiempo\tDato)

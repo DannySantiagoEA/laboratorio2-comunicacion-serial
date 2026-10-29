@@ -15,12 +15,18 @@ import javax.swing.UIManager;
 
 /**
  * Punto de entrada principal para el Laboratorio 2: Comunicación Serial con
- * Java (jSerialComm). Inicializa la arquitectura MVC en el Event Dispatch
- * Thread (EDT), ajusta las dimensiones ampliadas de la ventana para visualizar
- * todos los controles de conexión sin cortes y gestiona el cierre seguro de
- * puertos.
+ * Java (jSerialComm). Configurado para enlazar la GUI en Java (COM2) con la
+ * simulación de Proteus (COM1) a través del puente virtual HHD Free Virtual
+ * Serial Ports.
  */
 public class App {
+
+    /**
+     * Dejar en 'false' para que el puerto COM1 quede 100% libre para el bloque
+     * COMPIM de Proteus. Solo cambiar a 'true' si se desea probar la GUI en un
+     * PC que no tenga Proteus abierto.
+     */
+    private static final boolean ACTIVAR_EMULADOR_INTERNO_COM1 = false;
 
     private static volatile int tsEmuladoMs = 100;
     private static volatile boolean flujoActivo = true;
@@ -43,8 +49,13 @@ public class App {
         SerialCommunicationManager gestor = new SerialCommunicationManager();
         gestor.ejecutarDiagnosticoPuertos();
 
-        // 4. Iniciar emulador del firmware en COM1 únicamente si Proteus no tiene abierto COM1
-        iniciarEmuladorArduinoEnCom1SiEstaLibre();
+        // 4. Si se habilita el modo sin Proteus, levanta el emulador en COM1
+        if (ACTIVAR_EMULADOR_INTERNO_COM1) {
+            iniciarEmuladorArduinoEnCom1SiEstaLibre();
+        } else {
+            System.out.println("[Modo Proteus Activo] El puerto COM1 está reservado exclusivamente para el COMPIM de Proteus.");
+            System.out.println("                      En la ventana de Java seleccione 'COM2' y presione 'Conectar'.");
+        }
 
         // 5. Desplegar interfaz gráfica MVC dentro del Event Dispatch Thread (EDT)
         SwingUtilities.invokeLater(() -> {
@@ -54,7 +65,7 @@ public class App {
 
             vista.setTitle("Laboratorio 2 - Adquisición y Telecontrol Serial RS-232 (jSerialComm)");
 
-            // CORRECCIÓN: Dimensiones ampliadas (960x620) para evitar que la barra superior se divida en dos líneas
+            // Dimensiones amplias (960x620) para que la barra superior y los 4 LEDs se vean completos
             vista.setMinimumSize(new Dimension(920, 580));
             vista.setSize(960, 620);
             vista.setLocationRelativeTo(null); // Centrar en pantalla
@@ -77,12 +88,6 @@ public class App {
         });
     }
 
-    /**
-     * Si COM1 existe y no está ocupado por Proteus, levanta un hilo demonio que
-     * emula el firmware de Brayan (codigo_arduino.ino) enviando tramas de 12
-     * bytes [0x7A, 0x7B, Digital, ADC0..7, 0x7C] hacia COM2 y procesando
-     * comandos [0xAA ... 0x55].
-     */
     private static void iniciarEmuladorArduinoEnCom1SiEstaLibre() {
         Thread hiloEmulador = new Thread(() -> {
             SerialPort com1 = SerialPort.getCommPort("COM1");
@@ -90,11 +95,11 @@ public class App {
             com1.setComPortTimeouts(SerialPort.TIMEOUT_NONBLOCKING, 0, 0);
 
             if (!com1.openPort()) {
-                System.out.println("[Enlace COM1] COM1 ocupado por simulador externo (Proteus). Emulador interno desactivado.");
+                System.out.println("[Enlace COM1] COM1 ocupado por Proteus. Emulador interno desactivado.");
                 return;
             }
 
-            System.out.println("[Emulador COM1] Emulador del firmware activo en COM1 -> transmitiendo hacia COM2.");
+            System.out.println("[Emulador COM1] Emulador interno activo en COM1 -> transmitiendo hacia COM2.");
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 if (com1.isOpen()) {
                     com1.closePort();
@@ -106,26 +111,22 @@ public class App {
 
             while (com1.isOpen()) {
                 try {
-                    // A. Leer comandos enviados desde la GUI en COM2 ([0xAA, Cmd, ..., 0x55])
                     if (com1.bytesAvailable() > 0) {
                         int leidos = com1.readBytes(rxBuf, Math.min(com1.bytesAvailable(), rxBuf.length));
                         procesarComandosEnEmulador(rxBuf, leidos);
                     }
 
-                    // B. Construir y transmitir trama de 12 bytes igual que codigo_arduino.ino
                     if (flujoActivo) {
                         byte[] trama = new byte[12];
                         trama[0] = 0x7A;
                         trama[1] = 0x7B;
 
-                        // Simular estados de los 4 DIP-Switches (b0..b3)
                         int sw1 = (Math.sin(fase) >= 0) ? 1 : 0;
                         int sw2 = (Math.cos(fase * 0.5) >= 0) ? 1 : 0;
                         int sw3 = ((int) (fase * 2) % 2 == 0) ? 1 : 0;
                         int sw4 = 1;
                         trama[2] = (byte) ((sw1) | (sw2 << 1) | (sw3 << 2) | (sw4 << 3));
 
-                        // Simular los 8 canales ADC en modo 8 bits (0..255 -> 0.00V..5.00V)
                         for (int ch = 0; ch < 8; ch++) {
                             double v = 2.5 + 2.4 * Math.sin(fase + ch * 0.6);
                             int adc8 = (int) Math.round((v / 5.0) * 255.0);
