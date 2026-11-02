@@ -379,11 +379,11 @@ public class ControladorAdquisicion {
         File archivo = solicitarRutaGuardado("Exportar Señal Analógica a Archivo");
         if (archivo != null) {
             try {
-                int total = EscritorArchivo.guardarValorVsTiempo(
+                // Tarea #25: dos columnas Tiempo<TAB>Dato
+                int total = EscritorArchivo.guardarTiempoDato(
                         datos,
                         archivo,
-                        graficaAnalogica.getDescripcionVisible(),
-                        "V"
+                        EscritorArchivo.DECIMALES_ANALOGICA
                 );
                 JOptionPane.showMessageDialog(vista,
                         "Archivo analógico guardado con " + total + " muestras:\n" + archivo.getAbsolutePath(),
@@ -411,11 +411,11 @@ public class ControladorAdquisicion {
         File archivo = solicitarRutaGuardado("Exportar Señal Digital a Archivo");
         if (archivo != null) {
             try {
-                int total = EscritorArchivo.guardarValorVsTiempo(
+                // Tarea #25: dos columnas Tiempo<TAB>Dato (dato 0 o 1)
+                int total = EscritorArchivo.guardarTiempoDato(
                         datos,
                         archivo,
-                        graficaDigital.getDescripcionVisible(),
-                        "0/1"
+                        EscritorArchivo.DECIMALES_DIGITAL
                 );
                 JOptionPane.showMessageDialog(vista,
                         "Archivo digital guardado con " + total + " muestras:\n" + archivo.getAbsolutePath(),
@@ -429,7 +429,6 @@ public class ControladorAdquisicion {
             }
         }
     }
-
     private File solicitarRutaGuardado(String titulo) {
         JFileChooser selector = new JFileChooser();
         selector.setDialogTitle(titulo);
