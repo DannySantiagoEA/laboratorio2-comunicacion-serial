@@ -1,12 +1,14 @@
 // =====================================================================
 // LABORATORIO 2 - INTERFACES (UNIVERSIDAD DEL VALLE)
-// Microcontrolador: ATmega328P (Esquemático de Proteus Lab2Interfaces.pdsprj)
+// Microcontrolador: ATmega328P a 16 MHz (Esquemático de Proteus Lab2Interfaces.pdsprj)
 // Cumple HU-02 (Telemetría 0x7A 0x7B ... 0x7C) y HU-03 (Comandos 0xAA ... 0x55)
-// =====================================================================
+
 
 const unsigned long BAUDIOS = 9600;
+// UBRR = F_CPU / (16 * baudios) - 1 = 16 000 000 / 153 600 - 1 = 103
+const uint16_t VALOR_UBRR = (F_CPU / (16UL * BAUDIOS)) - 1;
 
-// --- 1. ADC: 8 entradas analógicas (PC0..PC5 = A0..A5, más ADC6=A6 y ADC7=A7) ---
+// --- 1. ADC: 8 entradas analógicas (PC0..PC5 = A0..A5, más ADC6 = A6 y ADC7 = A7) ---
 const uint8_t NUM_ANALOGICAS = 8;
 const uint8_t PINES_ADC[NUM_ANALOGICAS] = { A0, A1, A2, A3, A4, A5, A6, A7 };
 
@@ -17,7 +19,7 @@ const uint8_t PINES_ADC[NUM_ANALOGICAS] = { A0, A1, A2, A3, A4, A5, A6, A7 };
 const uint8_t NUM_SWITCHES = 4;
 const uint8_t PINES_SWITCH[NUM_SWITCHES] = { 4, 5, 6, 7 };
 
-// --- 3. 4 LEDs de salida (DI0..DI3) en PB0, PB1, PB2, PB3 (Pines Arduino 8, 9, 10, 11) ---
+// --- 3. 4 LEDs de salida en PB0, PB1, PB2, PB3 (Pines Arduino 8, 9, 10, 11) ---
 const uint8_t NUM_LEDS = 4;
 const uint8_t PINES_LEDS[NUM_LEDS] = { 8, 9, 10, 11 };
 
@@ -32,6 +34,8 @@ const uint8_t CMD_TIPO_LEDS = 0x01;
 const uint8_t CMD_TIPO_TS = 0x02;
 const uint8_t CMD_TIPO_FLUJO = 0x03;
 const uint8_t CMD_TAIL = 0x55;
+const uint8_t MAX_DATOS_CMD = 2;  // el comando más largo (Ts) trae 2 datos
+const uint8_t TAM_COLA_CMD = 4;   // comandos que pueden esperar turno en loop()
 
 #if ADC_10_BITS
 const uint8_t BYTES_POR_CANAL = 2;
@@ -41,25 +45,61 @@ const uint8_t BYTES_POR_CANAL = 1;
 
 const uint8_t LONGITUD_TRAMA = 2 + 1 + (NUM_ANALOGICAS * BYTES_POR_CANAL) + 1;
 
-// --- Variables Globales de Temporización y Estado ---
-volatile uint16_t periodoMuestreoMs = 100;  // Ts inicial = 100 ms
-volatile uint16_t contadorMs = 0;
-volatile bool tocaEnviar = false;
-volatile bool flujoHabilitado = true;
+// --- Timer1 y tiempo de muestreo ---
+// Prescaler 64: 16 MHz / 64 = 250 kHz -> una cuenta cada 4 us -> 250 cuentas por ms
+const uint16_t CUENTAS_POR_MS = 250;
+const uint16_t TS_INICIAL_MS = 100;  // igual que en Java
+const uint16_t TS_MIN_MS = 10;       // mismo mínimo que ValidadorMuestreo
 
+// =====================================================================
+// VARIABLES GLOBALES
+// =====================================================================
+
+// --- Temporización (las usa la ISR del Timer1 -> volatile) ---
+volatile uint8_t interrupcionesPorPeriodo = 1;  // veces que TCNT1 debe llegar a OCR1A para completar Ts
+volatile uint8_t contadorInterrupciones = 0;
+volatile bool tocaEnviar = false;
+bool flujoHabilitado = true;  // se envía desde el arranque
+
+// --- Recepción de comandos (las usa la ISR de la UART -> volatile) ---
+enum EstadoRx { ESPERA_CABECERA, ESPERA_TIPO, ESPERA_DATOS, ESPERA_COLA };
+volatile EstadoRx estadoRx = ESPERA_CABECERA;
+volatile uint8_t tipoRx = 0;
+volatile uint8_t datosRx[MAX_DATOS_CMD];
+volatile uint8_t datosEsperados = 0;
+volatile uint8_t datosRecibidos = 0;
+
+// Cola circular de comandos válidos, listos para ejecutarse en loop().
+// Al conectar, Java envía 3 comandos seguidos (Ts, LEDs e iniciar flujo); si
+// llegan mientras sale una trama (12,5 ms), la cola evita que se pisen.
+volatile uint8_t colaTipo[TAM_COLA_CMD];
+volatile uint8_t colaDatos[TAM_COLA_CMD][MAX_DATOS_CMD];
+volatile uint8_t indiceEscritura = 0;  // lo avanza la ISR
+volatile uint8_t indiceLectura = 0;    // lo avanza loop()
+
+// --- Telemetría ---
 uint16_t lecturasAdc[NUM_ANALOGICAS];
 uint8_t trama[LONGITUD_TRAMA];
 
-// Buffer para recepción de comandos desde Java (HU-03)
-uint8_t bufferRx[8];
-uint8_t indiceRx = 0;
-
 // =====================================================================
-// CONFIGURACIÓN DE PERIFÉRICOS (UART, ADC, SWITCHES, LEDS, TIMER1)
+// CONFIGURACIÓN DE PERIFÉRICOS (UART, ADC, SWITCHES, LEDS)
 // =====================================================================
 
+// La UART0 se configura por registros y no con Serial.begin(), porque la
+// librería Serial ya tiene su propia ISR(USART_RX_vect) y no deja definir
+// la de la Tarea #11 (el compilador marca "multiple definition of __vector_18").
 void configurarUart() {
-  Serial.begin(BAUDIOS, SERIAL_8N1);
+  UBRR0 = VALOR_UBRR;                                    // 9600 bps (error 0,16 %)
+  UCSR0A &= ~(1 << U2X0);                                // velocidad normal, sin tocar UDRE0
+  UCSR0B = (1 << RXEN0) | (1 << TXEN0) | (1 << RXCIE0);  // RX, TX e interrupción de RX
+  UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);                // 8 datos, sin paridad, 1 stop
+}
+
+void enviarByte(uint8_t dato) {
+  while (!(UCSR0A & (1 << UDRE0))) {
+    // espera a que el registro de transmisión quede libre
+  }
+  UDR0 = dato;
 }
 
 void configurarAdc() {
@@ -73,6 +113,10 @@ void configurarSwitches() {
   }
 }
 
+// =====================================================================
+// TAREA #12: CONMUTACIÓN DE LOS 4 PINES DE SALIDA HACIA LOS LEDs
+// =====================================================================
+
 void configurarLeds() {
   for (uint8_t i = 0; i < NUM_LEDS; i++) {
     pinMode(PINES_LEDS[i], OUTPUT);
@@ -80,32 +124,158 @@ void configurarLeds() {
   }
 }
 
+// bit0 -> LED1 (PB0, pin 8) ... bit3 -> LED4 (PB3, pin 11)
+void aplicarMascaraLeds(uint8_t mascara) {
+  for (uint8_t i = 0; i < NUM_LEDS; i++) {
+    bool encender = ((mascara >> i) & 0x01) != 0;
+    digitalWrite(PINES_LEDS[i], encender ? HIGH : LOW);
+  }
+}
+
+// =====================================================================
+// TIMER1 PERIÓDICO (modo CTC, prescaler 64)
+// =====================================================================
+
 void configurarTimer1() {
   noInterrupts();
-  TCCR1A = 0;
-  TCCR1B = 0;
-  TCNT1 = 0;
-// Configuración automática según el reloj configurado en Proteus (16 MHz o 8 MHz o 1 MHz)
-// Modo CTC (WGM12) con interrupción cada 1 ms
-#if F_CPU >= 16000000UL
-  OCR1A = 249;                                        // 16 MHz / 64 = 250 kHz -> 250 cuentas = 1 ms
-  TCCR1B = (1 << WGM12) | (1 << CS11) | (1 << CS10);  // Prescaler 64
-#elif F_CPU >= 8000000UL
-  OCR1A = 124;                                        // 8 MHz / 64 = 125 kHz -> 125 cuentas = 1 ms
-  TCCR1B = (1 << WGM12) | (1 << CS11) | (1 << CS10);  // Prescaler 64
-#else
-  OCR1A = 124;                          // 1 MHz / 8 = 125 kHz -> 125 cuentas = 1 ms
-  TCCR1B = (1 << WGM12) | (1 << CS11);  // Prescaler 8
-#endif
-  TIMSK1 = (1 << OCIE1A);
+  TCCR1A = 0;                                         // sin PWM
+  TCCR1B = (1 << WGM12) | (1 << CS11) | (1 << CS10);  // modo CTC, prescaler 64
+  TIMSK1 = (1 << OCIE1A);                             // interrupción por comparación A
+  interrupts();
+  ajustarPrecargaTimer(TS_INICIAL_MS);                // Tarea #13
+}
+
+// Cada vez que TCNT1 llega a OCR1A. Tras N interrupciones se completa Ts.
+ISR(TIMER1_COMPA_vect) {
+  contadorInterrupciones++;
+  if (contadorInterrupciones >= interrupcionesPorPeriodo) {
+    contadorInterrupciones = 0;
+    tocaEnviar = true;
+  }
+}
+
+// =====================================================================
+// TAREA #13: AJUSTE DINÁMICO DE LA PRECARGA DEL TIMER1
+// =====================================================================
+
+//   cuentas por interrupción = Ts * (250 / N)  ->  OCR1A = cuentas - 1
+void ajustarPrecargaTimer(uint16_t nuevoTsMs) {
+  const uint8_t DIVISORES[] = { 1, 2, 5, 10, 25, 50, 125, 250 };
+  uint8_t n = 250;
+  uint32_t cuentas = nuevoTsMs;  // valor con N = 250 (sirve hasta Ts = 65535)
+
+  for (uint8_t i = 0; i < sizeof(DIVISORES); i++) {
+    uint32_t c = (uint32_t)nuevoTsMs * (CUENTAS_POR_MS / DIVISORES[i]);
+    if (c <= 65536UL) {
+      n = DIVISORES[i];
+      cuentas = c;
+      break;
+    }
+  }
+
+  noInterrupts();                   // cambio atómico: la ISR no ve valores a medias
+  OCR1A = (uint16_t)(cuentas - 1);  // nueva precarga del comparador
+  TCNT1 = 0;                        // el nuevo periodo arranca desde cero
+  interrupcionesPorPeriodo = n;
+  contadorInterrupciones = 0;
   interrupts();
 }
 
-ISR(TIMER1_COMPA_vect) {
-  contadorMs++;
-  if (contadorMs >= periodoMuestreoMs) {
-    contadorMs = 0;
-    tocaEnviar = true;
+// =====================================================================
+// TAREA #11: RX ISR CON MÁQUINA DE ESTADOS FINITA
+// =====================================================================
+
+// Cuántos datos trae cada tipo de comando (0 = tipo desconocido)
+uint8_t datosDelTipo(uint8_t tipo) {
+  switch (tipo) {
+    case CMD_TIPO_LEDS: return 1;
+    case CMD_TIPO_TS: return 2;
+    case CMD_TIPO_FLUJO: return 1;
+    default: return 0;
+  }
+}
+
+// Se ejecuta cada vez que llega un byte por RX (PD0).
+// Solo valida el comando y lo pone en la cola; lo ejecuta loop().
+ISR(USART_RX_vect) {
+  uint8_t byteRx = UDR0;  // leer UDR0 limpia la bandera de la interrupción
+
+  switch (estadoRx) {
+    case ESPERA_CABECERA:
+      if (byteRx == CMD_HEADER) {
+        estadoRx = ESPERA_TIPO;
+      }
+      break;
+
+    case ESPERA_TIPO:
+      datosEsperados = datosDelTipo(byteRx);
+      if (datosEsperados > 0) {
+        tipoRx = byteRx;
+        datosRecibidos = 0;
+        estadoRx = ESPERA_DATOS;
+      } else if (byteRx != CMD_HEADER) {  // si llega otro 0xAA se queda esperando el tipo
+        estadoRx = ESPERA_CABECERA;
+      }
+      break;
+
+    case ESPERA_DATOS:
+      datosRx[datosRecibidos++] = byteRx;
+      if (datosRecibidos >= datosEsperados) {
+        estadoRx = ESPERA_COLA;
+      }
+      break;
+
+    case ESPERA_COLA:
+      if (byteRx == CMD_TAIL) {  // trama completa y válida -> a la cola
+        uint8_t siguiente = (indiceEscritura + 1) % TAM_COLA_CMD;
+        if (siguiente != indiceLectura) {  // si la cola está llena, el comando se pierde
+          colaTipo[indiceEscritura] = tipoRx;
+          for (uint8_t i = 0; i < datosEsperados; i++) {
+            colaDatos[indiceEscritura][i] = datosRx[i];
+          }
+          indiceEscritura = siguiente;
+        }
+        estadoRx = ESPERA_CABECERA;
+      } else if (byteRx == CMD_HEADER) {  // trama corrupta, pero empieza otra
+        estadoRx = ESPERA_TIPO;
+      } else {  // trama corrupta: se descarta
+        estadoRx = ESPERA_CABECERA;
+      }
+      break;
+  }
+}
+
+// Saca el comando más antiguo de la cola. Devuelve false si está vacía.
+bool tomarComando(uint8_t &tipo, uint8_t datos[]) {
+  if (indiceLectura == indiceEscritura) {
+    return false;
+  }
+  tipo = colaTipo[indiceLectura];
+  for (uint8_t i = 0; i < MAX_DATOS_CMD; i++) {
+    datos[i] = colaDatos[indiceLectura][i];
+  }
+  indiceLectura = (indiceLectura + 1) % TAM_COLA_CMD;
+  return true;
+}
+
+void ejecutarComando(uint8_t tipo, const uint8_t datos[]) {
+  switch (tipo) {
+    case CMD_TIPO_LEDS:
+      aplicarMascaraLeds(datos[0] & 0x0F);  // Tarea #12
+      break;
+
+    case CMD_TIPO_TS:
+      {
+        uint16_t nuevoTs = ((uint16_t)datos[0] << 8) | datos[1];  // MSB, LSB
+        if (nuevoTs >= TS_MIN_MS) {                                // fuera de rango: se ignora
+          ajustarPrecargaTimer(nuevoTs);                           // Tarea #13
+        }
+        break;
+      }
+
+    case CMD_TIPO_FLUJO:
+      flujoHabilitado = (datos[0] == 0x01);
+      break;
   }
 }
 
@@ -141,72 +311,14 @@ void construirYEnviarTrama() {
     trama[n++] = highByte(lecturasAdc[i]);
     trama[n++] = lowByte(lecturasAdc[i]);
 #else
-    trama[n++] = (uint8_t)(lecturasAdc[i] >> 2);      // 10 bits (0..1023) -> 8 bits (0..255)
+    trama[n++] = (uint8_t)(lecturasAdc[i] >> 2);  // 10 bits (0..1023) -> 8 bits (0..255)
 #endif
   }
 
   trama[n] = FIN_TRAMA;
-  Serial.write(trama, LONGITUD_TRAMA);
-}
 
-// =====================================================================
-// RECEPCIÓN Y EJECUCIÓN DE COMANDOS DESDE JAVA (HU-03)
-// =====================================================================
-
-void aplicarMascaraLeds(uint8_t mascara) {
-  for (uint8_t i = 0; i < NUM_LEDS; i++) {
-    bool encender = ((mascara >> i) & 0x01) != 0;
-    digitalWrite(PINES_LEDS[i], encender ? HIGH : LOW);
-  }
-}
-
-void procesarComandosEntrantes() {
-  while (Serial.available() > 0) {
-    uint8_t b = (uint8_t)Serial.read();
-
-    if (indiceRx == 0) {
-      if (b == CMD_HEADER) {
-        bufferRx[indiceRx++] = b;
-      }
-      continue;
-    }
-
-    bufferRx[indiceRx++] = b;
-
-    // Verificar según el tipo de comando en bufferRx[1]
-    uint8_t tipoCmd = bufferRx[1];
-
-    // Caso 1: Comando de LEDs (4 bytes: [0xAA, 0x01, Mascara, 0x55])
-    if (tipoCmd == CMD_TIPO_LEDS && indiceRx == 4) {
-      if (bufferRx[3] == CMD_TAIL) {
-        aplicarMascaraLeds(bufferRx[2] & 0x0F);
-      }
-      indiceRx = 0;
-    }
-    // Caso 2: Comando de Cambio de Ts (5 bytes: [0xAA, 0x02, MSB, LSB, 0x55])
-    else if (tipoCmd == CMD_TIPO_TS && indiceRx == 5) {
-      if (bufferRx[4] == CMD_TAIL) {
-        uint16_t nuevoTs = ((uint16_t)bufferRx[2] << 8) | (uint16_t)bufferRx[3];
-        if (nuevoTs >= 10) {
-          noInterrupts();
-          periodoMuestreoMs = nuevoTs;
-          contadorMs = 0;
-          interrupts();
-        }
-      }
-      indiceRx = 0;
-    }
-    // Caso 3: Comando de Control de Flujo (4 bytes: [0xAA, 0x03, Estado, 0x55])
-    else if (tipoCmd == CMD_TIPO_FLUJO && indiceRx == 4) {
-      if (bufferRx[3] == CMD_TAIL) {
-        flujoHabilitado = (bufferRx[2] == 0x01);
-      }
-      indiceRx = 0;
-    }
-    // Si llega un comando desconocido o se llena el buffer, reiniciar sincronismo
-    else if (indiceRx >= 5 || (tipoCmd != CMD_TIPO_LEDS && tipoCmd != CMD_TIPO_TS && tipoCmd != CMD_TIPO_FLUJO)) {
-      indiceRx = 0;
-    }
+  for (uint8_t i = 0; i < LONGITUD_TRAMA; i++) {
+    enviarByte(trama[i]);
   }
 }
 
@@ -223,8 +335,12 @@ void setup() {
 }
 
 void loop() {
-  // 1. Atender inmediatamente cualquier comando enviado desde la GUI de Java (HU-03)
-  procesarComandosEntrantes();
+  // 1. Ejecutar los comandos que dejó en cola la RX ISR (HU-03)
+  uint8_t tipo;
+  uint8_t datos[MAX_DATOS_CMD];
+  while (tomarComando(tipo, datos)) {
+    ejecutarComando(tipo, datos);
+  }
 
   // 2. Si se cumplió el periodo Ts, muestrear y transmitir trama continua (HU-02)
   if (tocaEnviar) {
