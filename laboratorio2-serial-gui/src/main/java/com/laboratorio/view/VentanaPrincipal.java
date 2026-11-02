@@ -1,39 +1,35 @@
-/*
- * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
- * Click nbfs://nbhost/SystemFileSystem/Templates/GUIForms/JFrame.java to edit this template
- */
 package com.laboratorio.view;
 
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
-import java.awt.event.ActionListener;
-import javax.swing.DefaultComboBoxModel;
-import javax.swing.JLayeredPane;
-import java.awt.Color;
 import java.awt.FlowLayout;
-import java.awt.GridLayout;
-import javax.swing.BorderFactory;
-import javax.swing.JLabel;
-import javax.swing.JPanel;
-import javax.swing.JToggleButton;
 import java.awt.Font;
+import java.awt.GridLayout;
+import java.awt.event.ActionListener;
+import javax.swing.BorderFactory;
+import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
+import javax.swing.JLabel;
+import javax.swing.JLayeredPane;
+import javax.swing.JPanel;
+import javax.swing.JToggleButton;
 
 /**
- * Vista principal. Solo muestra datos y avisa de eventos. No contiene lógica de
- * muestreo ni validación: eso lo hace el controlador. Se comunica por los
- * métodos públicos de la sección API.
- *
- * @author equipo 1
+ * Vista principal para el Laboratorio 2. Expone la API pública para que
+ * ControladorAdquisicion gestione el enlace serial, los selectores de canales
+ * analógicos/digitales (Tarea #21), los 4 actuadores LED (Tarea #22) y la
+ * actualización de tiempo de muestreo Ts (Tarea #23).
  */
 public class VentanaPrincipal extends javax.swing.JFrame {
 
-    // ===================== ATRIBUTOS DE ACTUADORES (HU-07) =====================
+    // ===================== ATRIBUTOS DE ACTUADORES (TAREA #22) =====================
     private final IndicadorLed[] ledsSalidas = new IndicadorLed[4];
     private final JToggleButton[] botonesSalidas = new JToggleButton[4];
     private JPanel panelContenedorActuadores;
+
     // ===================== ATRIBUTOS DE ENLACE SERIAL (HU-01 / HU-05) =====================
     private JPanel panelConexionSerial;
     private JComboBox<String> comboPuertosCom;
@@ -44,7 +40,6 @@ public class VentanaPrincipal extends javax.swing.JFrame {
 
     public VentanaPrincipal() {
         initComponents();
-        // Tamaño fijo: así el tamaño de la gráfica (700x260) no agranda la ventana
         jLayeredPane1.setPreferredSize(new Dimension(307, 235));
         jLayeredPane6.setPreferredSize(new Dimension(323, 235));
         setTiempoMuestreoActual(100);
@@ -57,24 +52,15 @@ public class VentanaPrincipal extends javax.swing.JFrame {
     }
 
     // ===================== API PÚBLICA =====================
-    /**
-     * Carga los nombres de los combos, ej. "Analógica 1 - Seno".
-     */
     public void cargarNombresCanales(String[] analogicas, String[] digitales) {
         Selector_analogo.setModel(new DefaultComboBoxModel<>(analogicas));
         Selector_digital.setModel(new DefaultComboBoxModel<>(digitales));
     }
 
-    /**
-     * Índice del canal analógico elegido (0 a 7).
-     */
     public int getCanalAnalogico() {
         return Selector_analogo.getSelectedIndex();
     }
 
-    /**
-     * Índice del canal digital elegido (0 a 3).
-     */
     public int getCanalDigital() {
         return Selector_digital.getSelectedIndex();
     }
@@ -87,23 +73,14 @@ public class VentanaPrincipal extends javax.swing.JFrame {
         Selector_digital.addActionListener(l);
     }
 
-    /**
-     * Muestra el tiempo de muestreo vigente, en ms.
-     */
     public void setTiempoMuestreoActual(int ms) {
         Tiempo_muestreo_actual.setText(String.valueOf(ms));
     }
 
-    /**
-     * Texto crudo del campo "Nuevo". La validación la hace el controlador.
-     */
     public String getTiempoMuestreoTexto() {
         return Tiempo_muestreo_nuevo.getText();
     }
 
-    /**
-     * Se dispara al pulsar "Aplicar".
-     */
     public void addListenerCambiarMuestreo(ActionListener l) {
         Button_nuevo_tiempo_muestreo.addActionListener(l);
     }
@@ -116,21 +93,15 @@ public class VentanaPrincipal extends javax.swing.JFrame {
         Button_almacenar_digital.addActionListener(l);
     }
 
-    /**
-     * Monta la gráfica analógica (GraficaTiempo) en el panel izquierdo.
-     */
     public void montarGraficaAnalogica(Component grafica) {
         montarEn(jLayeredPane1, grafica);
     }
 
-    /**
-     * Monta la gráfica digital (GraficaTiempo) en el panel derecho.
-     */
     public void montarGraficaDigital(Component grafica) {
         montarEn(jLayeredPane6, grafica);
     }
 
-    // ===================== INTERNOS =====================
+    // ===================== INTERNOS Y ENLACE SERIAL =====================
     private void montarEn(JLayeredPane contenedor, Component grafica) {
         contenedor.removeAll();
         contenedor.setLayout(new BorderLayout());
@@ -138,33 +109,29 @@ public class VentanaPrincipal extends javax.swing.JFrame {
         contenedor.revalidate();
         contenedor.repaint();
     }
-    // ===================== MÓDULO DE ACTUADORES Y LEDS (HU-07) =====================
 
-    // ===================== PANEL SUPERIOR DE CONEXIÓN SERIAL =====================
     private void inicializarPanelConexionSerial() {
-        panelConexionSerial = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 6));
+        panelConexionSerial = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
+        panelConexionSerial.setBackground(new Color(215, 222, 228));
         panelConexionSerial.setBorder(BorderFactory.createTitledBorder(
                 BorderFactory.createEtchedBorder(),
-                "Enlace Serial RS-232 / UART (jSerialComm - 9600 bps, 8-N-1)"));
-        panelConexionSerial.setBackground(new Color(245, 248, 252));
+                "Enlace Serial RS-232 (jSerialComm - 9600 bps, 8-N-1)"));
 
         JLabel lblPuerto = new JLabel("Puerto COM:");
-        lblPuerto.setFont(lblPuerto.getFont().deriveFont(Font.BOLD));
+        lblPuerto.setFont(new Font("Segoe UI", Font.BOLD, 12));
 
         comboPuertosCom = new JComboBox<>(new String[]{"COM2", "COM1"});
-        comboPuertosCom.setPreferredSize(new Dimension(110, 26));
+        comboPuertosCom.setPreferredSize(new Dimension(100, 26));
 
         btnRefrescarPuertos = new JButton("Refrescar");
-        btnRefrescarPuertos.setFocusPainted(false);
-
         btnConectarSerial = new JButton("Conectar");
-        btnConectarSerial.setFocusPainted(false);
-        btnConectarSerial.setPreferredSize(new Dimension(120, 26));
+        btnConectarSerial.setFont(new Font("Segoe UI", Font.BOLD, 12));
 
-        ledEstadoSerial = new IndicadorLed("Enlace", false);
+        ledEstadoSerial = new IndicadorLed("ENLACE", false);
+        ledEstadoSerial.setEstado(false);
+
         lblEstadoSerial = new JLabel("Desconectado (Modo Simulación Local)");
-        lblEstadoSerial.setForeground(new Color(150, 40, 40));
-        lblEstadoSerial.setFont(lblEstadoSerial.getFont().deriveFont(Font.BOLD));
+        lblEstadoSerial.setFont(new Font("Segoe UI", Font.PLAIN, 12));
 
         panelConexionSerial.add(lblPuerto);
         panelConexionSerial.add(comboPuertosCom);
@@ -174,56 +141,56 @@ public class VentanaPrincipal extends javax.swing.JFrame {
         panelConexionSerial.add(lblEstadoSerial);
     }
 
-    // ===================== MÓDULO DE ACTUADORES Y LEDS (HU-07) =====================
     private void inicializarModuloActuadores() {
-        panelContenedorActuadores = new JPanel(new GridLayout(1, 4, 15, 5));
+        panelContenedorActuadores = new JPanel(new GridLayout(1, 4, 15, 0));
+        panelContenedorActuadores.setBackground(new Color(221, 221, 221));
         panelContenedorActuadores.setBorder(BorderFactory.createTitledBorder(
                 BorderFactory.createEtchedBorder(),
-                "Salidas Digitales / Telecomando de LEDs hacia Microcontrolador (0xAA 0x01)"));
-        panelContenedorActuadores.setBackground(Color.WHITE);
+                "Salidas Digitales y Telecontrol de LEDs (0xAA 0x01 ... 0x55)"));
+
+        Color[] coloresLeds = {
+            new Color(0, 220, 90),
+            new Color(255, 190, 0),
+            new Color(240, 45, 45),
+            new Color(30, 144, 255)
+        };
 
         for (int i = 0; i < 4; i++) {
-            int canal = i + 1;
-            JPanel panelCanal = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 4));
-            panelCanal.setOpaque(false);
+            JPanel celda = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 4));
+            celda.setOpaque(false);
 
-            ledsSalidas[i] = new IndicadorLed("Salida D" + canal, false);
-            botonesSalidas[i] = new JToggleButton("Out " + canal);
-            botonesSalidas[i].setFocusPainted(false);
-            botonesSalidas[i].setPreferredSize(new Dimension(80, 28));
+            ledsSalidas[i] = new IndicadorLed("Salida D" + (i + 1), false);
+            botonesSalidas[i] = new JToggleButton("Out " + (i + 1));
 
-            panelCanal.add(new JLabel("LED " + canal + ":"));
-            panelCanal.add(ledsSalidas[i]);
-            panelCanal.add(botonesSalidas[i]);
-
-            panelContenedorActuadores.add(panelCanal);
+            celda.add(ledsSalidas[i]);
+            celda.add(botonesSalidas[i]);
+            panelContenedorActuadores.add(celda);
         }
 
         getContentPane().removeAll();
         getContentPane().setLayout(new BorderLayout(0, 4));
-        getContentPane().add(panelConexionSerial, BorderLayout.NORTH);
+        if (panelConexionSerial != null) {
+            getContentPane().add(panelConexionSerial, BorderLayout.NORTH);
+        }
         getContentPane().add(jPanel1, BorderLayout.CENTER);
         getContentPane().add(panelContenedorActuadores, BorderLayout.SOUTH);
+        revalidate();
+        repaint();
     }
 
-    // ===================== API PÚBLICA DE CONEXIÓN SERIAL =====================
     public void cargarPuertosDisponibles(String[] puertos) {
-        if (puertos == null || puertos.length == 0) {
-            comboPuertosCom.setModel(new DefaultComboBoxModel<>(new String[]{"COM2", "COM1"}));
-        } else {
-            comboPuertosCom.setModel(new DefaultComboBoxModel<>(puertos));
-            for (String p : puertos) {
-                if ("COM2".equalsIgnoreCase(p)) {
-                    comboPuertosCom.setSelectedItem(p);
-                    break;
-                }
+        comboPuertosCom.setModel(new DefaultComboBoxModel<>(puertos));
+        for (String p : puertos) {
+            if ("COM2".equalsIgnoreCase(p)) {
+                comboPuertosCom.setSelectedItem(p);
+                break;
             }
         }
     }
 
     public String getPuertoSeleccionado() {
-        Object item = comboPuertosCom.getSelectedItem();
-        return item != null ? item.toString().trim() : "";
+        Object sel = comboPuertosCom.getSelectedItem();
+        return sel != null ? sel.toString() : "COM2";
     }
 
     public void addListenerRefrescarPuertos(ActionListener l) {
@@ -234,31 +201,24 @@ public class VentanaPrincipal extends javax.swing.JFrame {
         btnConectarSerial.addActionListener(l);
     }
 
-    public void actualizarEstadoConexionSerial(boolean conectado, String detalle) {
+    public void actualizarEstadoConexionSerial(boolean conectado, String mensaje) {
         ledEstadoSerial.setEstado(conectado);
+        lblEstadoSerial.setText(mensaje);
+        btnConectarSerial.setText(conectado ? "Desconectar" : "Conectar");
         comboPuertosCom.setEnabled(!conectado);
         btnRefrescarPuertos.setEnabled(!conectado);
-        btnConectarSerial.setText(conectado ? "Desconectar" : "Conectar");
-        lblEstadoSerial.setText(detalle);
-        lblEstadoSerial.setForeground(conectado ? new Color(20, 130, 50) : new Color(150, 40, 40));
     }
 
     public IndicadorLed getLedSalida(int canal) {
-        if (canal >= 0 && canal < 4) {
-            return ledsSalidas[canal];
-        }
-        return null;
+        return (canal >= 0 && canal < ledsSalidas.length) ? ledsSalidas[canal] : null;
     }
 
     public JToggleButton getBotonSalida(int canal) {
-        if (canal >= 0 && canal < 4) {
-            return botonesSalidas[canal];
-        }
-        return null;
+        return (canal >= 0 && canal < botonesSalidas.length) ? botonesSalidas[canal] : null;
     }
 
     public void addListenerSalida(int canal, ActionListener l) {
-        if (canal >= 0 && canal < 4 && botonesSalidas[canal] != null) {
+        if (canal >= 0 && canal < botonesSalidas.length) {
             botonesSalidas[canal].addActionListener(l);
         }
     }

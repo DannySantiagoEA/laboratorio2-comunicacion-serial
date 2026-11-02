@@ -11,50 +11,42 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Controlador de comunicación serial utilizando la API jSerialComm (HU-04). -
- * Tarea #15: Integración de librería y detección de puertos COM virtuales. -
- * Tarea #16: Configuración de parámetros seriales (9600, 8-N-1),
- * apertura/cierre seguro del descriptor de puerto y manejo de excepciones. -
- * Tarea #17: Escuchador SerialPortDataListener (LISTENING_EVENT_DATA_AVAILABLE)
- * y parser de trama continua (cabecera 0x7A 0x7B, byte digital, 8 ADC y cola
- * 0x7C). - Tarea #18: Métodos de despacho de comandos hacia el microcontrolador
- * (LEDs y Ts) delimitados con [0xAA ... 0x55].
+ * Controlador de comunicación serial utilizando la API jSerialComm. - Tarea
+ * #15: Integración de librería y detección de puertos COM virtuales. - Tarea
+ * #16: Configuración de parámetros seriales (9600, 8-N-1), apertura/cierre
+ * seguro del descriptor de puerto y manejo de excepciones. - Tarea #17:
+ * Escuchador SerialPortDataListener (LISTENING_EVENT_DATA_AVAILABLE) y parser
+ * de trama continua (cabecera 0x7A 0x7B, byte digital, 8 ADC y cola 0x7C). -
+ * Tarea #18 / #22 / #23: Despacho de comandos binarios [0xAA ... 0x55] hacia el
+ * microcontrolador.
  */
 public class SerialCommunicationManager {
 
-    // Puerto virtual por defecto para la aplicación Java (par COM1 <-> COM2)
     public static final String PUERTO_OBJETIVO_DEFAULT = "COM2";
 
-    // Parámetros seriales estandarizados (Tarea #16: 9600 bps, 8-N-1)
+    // Parámetros seriales estandarizados (9600 bps, 8-N-1)
     public static final int DEFAULT_BAUD_RATE = 9600;
     public static final int DEFAULT_DATA_BITS = 8;
     public static final int DEFAULT_STOP_BITS = SerialPort.ONE_STOP_BIT;
     public static final int DEFAULT_PARITY = SerialPort.NO_PARITY;
 
-    // Delimitadores de sincronismo de la trama continua Micro -> PC (Tarea #17)
+    // Delimitadores de sincronismo de la trama continua (Micro -> PC)
     public static final byte HEADER_BYTE_1 = (byte) 0x7A;
     public static final byte HEADER_BYTE_2 = (byte) 0x7B;
     public static final byte TAIL_BYTE = (byte) 0x7C;
 
-    // Delimitadores e identificadores de comandos PC -> Micro (Tarea #18)
-    public static final byte CMD_HEADER = (byte) 0xAA;
+    // Delimitadores y códigos de comando (PC -> Micro)
+    public static final byte CMD_START_BYTE = (byte) 0xAA;
+    public static final byte CMD_END_BYTE = (byte) 0x55;
     public static final byte CMD_TIPO_LEDS = (byte) 0x01;
-    public static final byte CMD_TIPO_MUESTREO = (byte) 0x02;
+    public static final byte CMD_TIPO_TS = (byte) 0x02;
     public static final byte CMD_TIPO_FLUJO = (byte) 0x03;
-    public static final byte CMD_TAIL = (byte) 0x55;
-
-    // Cotas de seguridad para el periodo de muestreo Ts en milisegundos (16 bits unsigned)
-    public static final int MIN_PERIODO_MS = 10;
-    public static final int MAX_PERIODO_MS = 65535;
 
     // Dimensiones del protocolo
     public static final int NUM_CANALES_DIGITALES = 4;
     public static final int NUM_CANALES_ANALOGICOS = 8;
     public static final double VOLTAJE_REFERENCIA = 5.0;
 
-    // Longitud total de trama según resolución ADC:
-    // - Modo 8 bits: 2 (Header) + 1 (Dig) + 8 (ADC) + 1 (Tail) = 12 bytes
-    // - Modo 10 bits: 2 (Header) + 1 (Dig) + 16 (ADC) + 1 (Tail) = 20 bytes
     public static final int LONGITUD_TRAMA_8_BITS = 12;
     public static final int LONGITUD_TRAMA_10_BITS = 20;
 
@@ -62,10 +54,8 @@ public class SerialCommunicationManager {
     private final ByteArrayOutputStream bufferRecepcion = new ByteArrayOutputStream();
     private boolean modoAdc10Bits = false;
 
-    // Contadores de diagnóstico de recepción y transmisión
     private long tramasValidasRecibidas = 0;
     private long bytesDescartadosPorRuido = 0;
-    private long comandosEnviados = 0;
 
     private TramaRecibidaListener listenerTrama;
 
@@ -239,36 +229,8 @@ public class SerialCommunicationManager {
         return isConectado() ? puertoActivo.getSystemPortName() : "DESCONECTADO";
     }
 
-    public synchronized String obtenerResumenConfiguracion() {
-        if (!isConectado()) {
-            return "Sin conexión activa.";
-        }
-        String paridadTxt = switch (puertoActivo.getParity()) {
-            case SerialPort.NO_PARITY ->
-                "None (N)";
-            case SerialPort.EVEN_PARITY ->
-                "Even (E)";
-            case SerialPort.ODD_PARITY ->
-                "Odd (O)";
-            case SerialPort.MARK_PARITY ->
-                "Mark (M)";
-            case SerialPort.SPACE_PARITY ->
-                "Space (S)";
-            default ->
-                "Desconocida";
-        };
-        int stopTxt = (puertoActivo.getNumStopBits() == SerialPort.ONE_STOP_BIT) ? 1 : 2;
-
-        return String.format("Puerto: %s | BaudRate: %d bps | DataBits: %d | Parity: %s | StopBits: %d",
-                puertoActivo.getSystemPortName(),
-                puertoActivo.getBaudRate(),
-                puertoActivo.getNumDataBits(),
-                paridadTxt,
-                stopTxt);
-    }
-
     // =========================================================================
-    // ESCUCHADOR ASÍNCRONO Y PARSER DE TRAMA CONTINUA (TAREA #17)
+    // ESCUCHADOR ASÍNCRONO Y PARSER DE TRAMA CONTINUA (TAREA #17 / #21)
     // =========================================================================
     private void registrarEscuchadorDatosAsincrono() {
         puertoActivo.addDataListener(new SerialPortDataListener() {
@@ -379,185 +341,92 @@ public class SerialCommunicationManager {
     }
 
     // =========================================================================
-    // DESPACHO DE COMANDOS DE CONTROL HACIA EL MICROCONTROLADOR (TAREA #18)
+    // DESPACHO DE COMANDOS AL MICROCONTROLADOR (TAREAS #18, #22 y #23)
     // =========================================================================
-    /**
-     * Tarea #18: Construye la trama binaria de 4 bytes para conmutar los 4
-     * LEDs: [0xAA] [0x01] [MASCARA_LEDS (0x00..0x0F)] [0x55]
-     *
-     * @param mascara Byte cuyos 4 bits menos significativos (b0..b3) definen el
-     * estado de LED1..LED4.
-     * @return Arreglo de 4 bytes listo para transmitir.
-     */
-    public byte[] construirTramaComandoLeds(byte mascara) {
-        byte mascaraLimpia = (byte) (mascara & 0x0F); // Garantizar que solo b0..b3 estén activos
-        return new byte[]{
-            CMD_HEADER,
-            CMD_TIPO_LEDS,
-            mascaraLimpia,
-            CMD_TAIL
-        };
-    }
-
-    /**
-     * Tarea #18: Envía por el puerto serial activo el comando de
-     * encendido/apagado de los 4 LEDs en Proteus/SimulIDE. Estructura: [0xAA]
-     * [0x01] [MASCARA_LEDS] [0x55]
-     *
-     * @param mascara Byte de máscara (bit 0 = LED 1, bit 1 = LED 2, bit 2 = LED
-     * 3, bit 3 = LED 4).
-     * @return true si los 4 bytes se transmitieron íntegramente por el puerto.
-     * @throws SerialConnectionException Si el puerto está cerrado o falla la
-     * escritura.
-     */
-    public synchronized boolean enviarComandoLeds(byte mascara) throws SerialConnectionException {
-        verificarConexionParaEnvio();
-
-        byte[] trama = construirTramaComandoLeds(mascara);
-        int enviados = puertoActivo.writeBytes(trama, trama.length);
-
-        if (enviados != trama.length) {
-            throw new SerialConnectionException(
-                    "Fallo al transmitir comando de LEDs: se enviaron " + enviados + " de " + trama.length + " bytes.");
+    private void verificarConexionActiva() throws SerialConnectionException {
+        if (!isConectado()) {
+            throw new SerialConnectionException("No hay un puerto serial conectado para enviar comandos.");
         }
+    }
 
-        comandosEnviados++;
-        System.out.printf("[TX #18 LEDs] Trama enviada (%d bytes): %s | Mascara binaria: %s%n",
-                trama.length,
-                formatearHex(trama),
-                String.format("%4s", Integer.toBinaryString(mascara & 0x0F)).replace(' ', '0'));
-        return true;
+    public synchronized void enviarBytes(byte[] datos) throws SerialConnectionException {
+        verificarConexionActiva();
+        if (datos == null || datos.length == 0) {
+            return;
+        }
+        int escritos = puertoActivo.writeBytes(datos, datos.length);
+        if (escritos != datos.length) {
+            throw new SerialConnectionException("Error de escritura serial: se enviaron "
+                    + escritos + " de " + datos.length + " bytes.");
+        }
     }
 
     /**
-     * Sobrecarga auxiliar que convierte un arreglo de 4 booleanos (ej. desde
-     * SalidasDigitales o los botones Out 1..Out 4 de la GUI) en el byte de
-     * máscara y lo despacha al microcontrolador.
-     *
-     * @param estadosLeds Arreglo booleano de longitud 4 (índice 0 = LED 1 ...
-     * índice 3 = LED 4).
-     * @return true si el comando se transmitió correctamente.
-     * @throws SerialConnectionException Si el arreglo es inválido o el puerto
-     * no está abierto.
+     * Tarea #18 y #22: Envía el comando [0xAA, 0x01, Mascara, 0x55] a partir
+     * del arreglo booleano de los 4 LEDs.
      */
-    public synchronized boolean enviarComandoLeds(boolean[] estadosLeds) throws SerialConnectionException {
+    public synchronized void enviarComandoLeds(boolean[] estadosLeds) throws SerialConnectionException {
         if (estadosLeds == null || estadosLeds.length < NUM_CANALES_DIGITALES) {
-            throw new SerialConnectionException("Se requiere el estado de las 4 salidas digitales para armar la máscara.");
+            throw new IllegalArgumentException("El arreglo de estados debe contener al menos 4 elementos.");
         }
-        byte mascara = 0x00;
+        byte mascara = 0;
         for (int i = 0; i < NUM_CANALES_DIGITALES; i++) {
             if (estadosLeds[i]) {
-                mascara |= (byte) (1 << i);
+                mascara |= (1 << i);
             }
         }
-        return enviarComandoLeds(mascara);
+        enviarComandoLeds(mascara);
     }
 
     /**
-     * Tarea #18: Construye la trama binaria de 5 bytes para cambiar el periodo
-     * de muestreo Ts: [0xAA] [0x02] [MSB_Ts] [LSB_Ts] [0x55]
-     *
-     * @param periodoMs Nuevo periodo de muestreo en milisegundos (10 ms a 65535
-     * ms).
-     * @return Arreglo de 5 bytes listo para transmitir.
+     * Tarea #18 y #22: Envía la trama [0xAA, 0x01, MASCARA_LEDS, 0x55].
      */
-    public byte[] construirTramaComandoMuestreo(int periodoMs) {
+    public synchronized void enviarComandoLeds(byte mascaraLeds) throws SerialConnectionException {
+        byte mascaraLimpia = (byte) (mascaraLeds & 0x0F);
+        byte[] tramaComando = new byte[]{
+            CMD_START_BYTE,
+            CMD_TIPO_LEDS,
+            mascaraLimpia,
+            CMD_END_BYTE
+        };
+        enviarBytes(tramaComando);
+        System.out.printf(">> [TX Serial 0x01] Comando LEDs enviado: [0xAA, 0x01, 0x%02X, 0x55]%n", mascaraLimpia);
+    }
+
+    /**
+     * Tarea #18 y #23: Envía la trama [0xAA, 0x02, MSB_Ts, LSB_Ts, 0x55] con el
+     * nuevo periodo Ts (ms).
+     */
+    public synchronized void enviarComandoMuestreo(int periodoMs) throws SerialConnectionException {
         byte msb = (byte) ((periodoMs >> 8) & 0xFF);
         byte lsb = (byte) (periodoMs & 0xFF);
-        return new byte[]{
-            CMD_HEADER,
-            CMD_TIPO_MUESTREO,
+
+        byte[] tramaComando = new byte[]{
+            CMD_START_BYTE,
+            CMD_TIPO_TS,
             msb,
             lsb,
-            CMD_TAIL
+            CMD_END_BYTE
         };
+        enviarBytes(tramaComando);
+        System.out.printf(">> [TX Serial 0x02] Comando Ts = %d ms enviado: [0xAA, 0x02, 0x%02X, 0x%02X, 0x55]%n",
+                periodoMs, msb & 0xFF, lsb & 0xFF);
     }
 
     /**
-     * Tarea #18: Envía por el puerto serial activo el comando para reconfigurar
-     * en caliente el periodo de muestreo (Ts) del Timer en el microcontrolador.
-     * Estructura: [0xAA] [0x02] [MSB_Ts] [LSB_Ts] [0x55]
-     *
-     * @param periodoMs Periodo de muestreo deseado en milisegundos (entre 10 y
-     * 65535 ms).
-     * @return true si los 5 bytes se transmitieron íntegramente por el puerto.
-     * @throws SerialConnectionException Si el periodo está fuera de rango, el
-     * puerto está cerrado o falla el envío.
+     * Envía la trama [0xAA, 0x03, 0x01=Iniciar / 0x00=Pausar, 0x55].
      */
-    public synchronized boolean enviarComandoMuestreo(int periodoMs) throws SerialConnectionException {
-        if (periodoMs < MIN_PERIODO_MS || periodoMs > MAX_PERIODO_MS) {
-            throw new SerialConnectionException(String.format(
-                    "El periodo de muestreo Ts (%d ms) está fuera del rango permitido [%d ms - %d ms].",
-                    periodoMs, MIN_PERIODO_MS, MAX_PERIODO_MS));
-        }
-        verificarConexionParaEnvio();
-
-        byte[] trama = construirTramaComandoMuestreo(periodoMs);
-        int enviados = puertoActivo.writeBytes(trama, trama.length);
-
-        if (enviados != trama.length) {
-            throw new SerialConnectionException(
-                    "Fallo al transmitir comando de muestreo Ts: se enviaron " + enviados + " de " + trama.length + " bytes.");
-        }
-
-        comandosEnviados++;
-        System.out.printf("[TX #18 Ts]   Trama enviada (%d bytes): %s | Nuevo Ts = %d ms (MSB=0x%02X, LSB=0x%02X)%n",
-                trama.length,
-                formatearHex(trama),
-                periodoMs,
-                trama[2] & 0xFF,
-                trama[3] & 0xFF);
-        return true;
-    }
-
-    /**
-     * Método complementario del protocolo (Comando 0x03) para ordenar al
-     * microcontrolador iniciar (0x01) o pausar (0x00) la emisión continua de
-     * telemetría. Estructura: [0xAA] [0x03] [0x01 / 0x00] [0x55]
-     */
-    public synchronized boolean enviarComandoEstadoFlujo(boolean iniciar) throws SerialConnectionException {
-        verificarConexionParaEnvio();
-
-        byte[] trama = new byte[]{
-            CMD_HEADER,
+    public synchronized void enviarComandoEstadoFlujo(boolean iniciar) throws SerialConnectionException {
+        byte estadoByte = (byte) (iniciar ? 0x01 : 0x00);
+        byte[] tramaComando = new byte[]{
+            CMD_START_BYTE,
             CMD_TIPO_FLUJO,
-            (byte) (iniciar ? 0x01 : 0x00),
-            CMD_TAIL
+            estadoByte,
+            CMD_END_BYTE
         };
-        int enviados = puertoActivo.writeBytes(trama, trama.length);
-        if (enviados != trama.length) {
-            throw new SerialConnectionException("No se pudo enviar el comando de control de flujo.");
-        }
-        comandosEnviados++;
-        System.out.printf("[TX #18 Flujo] Trama enviada (%d bytes): %s | Accion: %s%n",
-                trama.length, formatearHex(trama), iniciar ? "INICIAR" : "DETENER");
-        return true;
-    }
-
-    private void verificarConexionParaEnvio() throws SerialConnectionException {
-        if (!isConectado()) {
-            throw new SerialConnectionException(
-                    "No hay una conexión serial activa. Conecte el puerto COM antes de enviar comandos.");
-        }
-    }
-
-    /**
-     * Convierte un arreglo de bytes a su representación hexadecimal legible
-     * (ej. "[0xAA, 0x01, 0x05, 0x55]").
-     */
-    public static String formatearHex(byte[] trama) {
-        if (trama == null || trama.length == 0) {
-            return "[]";
-        }
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < trama.length; i++) {
-            sb.append(String.format("0x%02X", trama[i] & 0xFF));
-            if (i < trama.length - 1) {
-                sb.append(", ");
-            }
-        }
-        sb.append("]");
-        return sb.toString();
+        enviarBytes(tramaComando);
+        System.out.printf(">> [TX Serial 0x03] Comando Flujo (%s) enviado: [0xAA, 0x03, 0x%02X, 0x55]%n",
+                (iniciar ? "INICIAR" : "PAUSAR"), estadoByte);
     }
 
     public synchronized long getTramasValidasRecibidas() {
@@ -568,13 +437,6 @@ public class SerialCommunicationManager {
         return bytesDescartadosPorRuido;
     }
 
-    public synchronized long getComandosEnviados() {
-        return comandosEnviados;
-    }
-
-    // =========================================================================
-    // DIAGNÓSTICO DE PUERTOS (TAREA #15)
-    // =========================================================================
     public void ejecutarDiagnosticoPuertos() {
         System.out.println("=================================================================");
         System.out.println("  DIAGNOSTICO TAREA #15 - DETECCION DE PUERTOS CON jSerialComm   ");

@@ -15,49 +15,39 @@ import javax.swing.UIManager;
 
 /**
  * Punto de entrada principal para el Laboratorio 2: Comunicación Serial con
- * Java (jSerialComm). Configurado para enlazar la GUI en Java (COM2) con la
- * simulación de Proteus (COM1) a través del puente virtual HHD Free Virtual
- * Serial Ports.
+ * Java (jSerialComm). Inicializa la arquitectura MVC en el Event Dispatch
+ * Thread (EDT), ajusta las dimensiones ampliadas de la ventana (960x620) y cede
+ * COM1 exclusivamente a Proteus.
  */
 public class App {
 
-    /**
-     * Dejar en 'false' para que el puerto COM1 quede 100% libre para el bloque
-     * COMPIM de Proteus. Solo cambiar a 'true' si se desea probar la GUI en un
-     * PC que no tenga Proteus abierto.
-     */
+    // En false para que Proteus sea dueño exclusivo de COM1
     private static final boolean ACTIVAR_EMULADOR_INTERNO_COM1 = false;
 
     private static volatile int tsEmuladoMs = 100;
     private static volatile boolean flujoActivo = true;
 
     public static void main(String[] args) {
-        // 1. Forzar salida de consola en UTF-8 para mostrar tildes correctamente en NetBeans
         try {
             System.setOut(new PrintStream(System.out, true, StandardCharsets.UTF_8));
             System.setErr(new PrintStream(System.err, true, StandardCharsets.UTF_8));
         } catch (Exception ignored) {
         }
 
-        // 2. Aplicar Look & Feel nativo del sistema operativo
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
         } catch (Exception ignored) {
         }
 
-        // 3. Diagnóstico inicial de puertos seriales detectados (Tarea #15)
         SerialCommunicationManager gestor = new SerialCommunicationManager();
         gestor.ejecutarDiagnosticoPuertos();
 
-        // 4. Si se habilita el modo sin Proteus, levanta el emulador en COM1
         if (ACTIVAR_EMULADOR_INTERNO_COM1) {
             iniciarEmuladorArduinoEnCom1SiEstaLibre();
         } else {
-            System.out.println("[Modo Proteus Activo] El puerto COM1 está reservado exclusivamente para el COMPIM de Proteus.");
-            System.out.println("                      En la ventana de Java seleccione 'COM2' y presione 'Conectar'.");
+            System.out.println("[Modo Proteus] Emulador interno en COM1 desactivado. COM1 libre para COMPIM de Proteus.");
         }
 
-        // 5. Desplegar interfaz gráfica MVC dentro del Event Dispatch Thread (EDT)
         SwingUtilities.invokeLater(() -> {
             VentanaPrincipal vista = new VentanaPrincipal();
             Data modelo = new Data();
@@ -65,12 +55,10 @@ public class App {
 
             vista.setTitle("Laboratorio 2 - Adquisición y Telecontrol Serial RS-232 (jSerialComm)");
 
-            // Dimensiones amplias (960x620) para que la barra superior y los 4 LEDs se vean completos
             vista.setMinimumSize(new Dimension(920, 580));
             vista.setSize(960, 620);
-            vista.setLocationRelativeTo(null); // Centrar en pantalla
+            vista.setLocationRelativeTo(null);
 
-            // Liberación segura del puerto serial al cerrar la ventana
             vista.addWindowListener(new WindowAdapter() {
                 @Override
                 public void windowClosing(WindowEvent e) {
@@ -82,8 +70,6 @@ public class App {
             });
 
             vista.setVisible(true);
-
-            // Inicia con simulación local de respaldo hasta que el usuario conecte COM2
             controlador.iniciarAdquisicion();
         });
     }
@@ -95,11 +81,11 @@ public class App {
             com1.setComPortTimeouts(SerialPort.TIMEOUT_NONBLOCKING, 0, 0);
 
             if (!com1.openPort()) {
-                System.out.println("[Enlace COM1] COM1 ocupado por Proteus. Emulador interno desactivado.");
+                System.out.println("[Enlace COM1] COM1 ocupado por simulador externo (Proteus).");
                 return;
             }
 
-            System.out.println("[Emulador COM1] Emulador interno activo en COM1 -> transmitiendo hacia COM2.");
+            System.out.println("[Emulador COM1] Emulador activo en COM1 -> transmitiendo hacia COM2.");
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 if (com1.isOpen()) {
                     com1.closePort();
@@ -157,13 +143,12 @@ public class App {
                 int cmd = buf[i + 1] & 0xFF;
                 if (cmd == 0x01 && (buf[i + 3] & 0xFF) == 0x55) {
                     int mascara = buf[i + 2] & 0x0F;
-                    System.out.printf("[Emulador COM1 <- Java COM2] Comando LEDs recibido: máscara = 0x%02X (%s)%n",
-                            mascara, String.format("%4s", Integer.toBinaryString(mascara)).replace(' ', '0'));
+                    System.out.printf("[Emulador COM1 <- Java COM2] Comando LEDs recibido: máscara = 0x%02X%n", mascara);
                 } else if (cmd == 0x02 && i + 4 < len && (buf[i + 4] & 0xFF) == 0x55) {
                     int nuevoTs = ((buf[i + 2] & 0xFF) << 8) | (buf[i + 3] & 0xFF);
                     if (nuevoTs >= 10) {
                         tsEmuladoMs = nuevoTs;
-                        System.out.println("[Emulador COM1 <- Java COM2] Comando Ts recibido: nuevo periodo = " + tsEmuladoMs + " ms");
+                        System.out.println("[Emulador COM1 <- Java COM2] Comando Ts recibido: " + tsEmuladoMs + " ms");
                     }
                 } else if (cmd == 0x03 && (buf[i + 3] & 0xFF) == 0x55) {
                     flujoActivo = (buf[i + 2] == 0x01);
