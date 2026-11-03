@@ -1,11 +1,3 @@
-/*
- * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
- * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Class.java to edit this template
- */
- /*
- * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
- * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Class.java to edit this template
- */
 package com.laboratorio.model;
 
 import java.io.BufferedWriter;
@@ -17,43 +9,67 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Tarea #22: Rutina de escritura en disco (BufferedWriter/FileWriter) con el
- * formato Valor vs. Tiempo bajo try-with-resources.
+ * Tarea #25 (HU-06): Persistencia en disco en dos columnas delimitadas por
+ * tabulador (Tiempo\tDato), utilizando BufferedWriter bajo try-with-resources.
+ *
+ * Ejemplo del archivo que se genera (señal analógica, 4 decimales): Tiempo	Dato
+ * 0.000	2.4902 0.100	2.5098
+ *
+ * Señal digital (0 decimales): Tiempo	Dato 0.000	1 0.100	0
  */
 public class EscritorArchivo {
 
+    public static final String SEPARADOR = "\t";
+    public static final String ENCABEZADO = "Tiempo" + SEPARADOR + "Dato";
+    public static final int DECIMALES_ANALOGICA = 4;
+    public static final int DECIMALES_DIGITAL = 0;
+    private static final int DECIMALES_TIEMPO = 3;
+
     /**
-     * Escribe las muestras (ti, Vi) en un archivo de texto.
+     * Escribe las muestras (t, dato) en dos columnas separadas estrictamente
+     * por tabulador.
      *
-     * @param muestras lista de pares {tiempo, valor}
+     * @param muestras lista de pares {tiempo (s), dato}
      * @param archivo archivo destino (se crea o se sobrescribe)
-     * @param nombreSenal nombre de la señal, va en el encabezado
-     * @param unidad unidad del valor, ej. "V"
+     * @param decimales decimales de la columna Dato (4 analógica, 0 digital)
      * @return cantidad de muestras escritas
      * @throws IOException si no se puede crear o escribir el archivo
      */
-    public static int guardarValorVsTiempo(List<double[]> muestras, File archivo,
-            String nombreSenal, String unidad) throws IOException {
+    public static int guardarTiempoDato(List<double[]> muestras, File archivo,
+            int decimales) throws IOException {
 
+        if (muestras == null || muestras.isEmpty()) {
+            throw new IllegalArgumentException("No hay muestras para guardar.");
+        }
+        if (archivo == null) {
+            throw new IllegalArgumentException("No se indicó el archivo de destino.");
+        }
+
+        String formatoFila = "%." + DECIMALES_TIEMPO + "f" + SEPARADOR + "%." + decimales + "f";
+
+        // try-with-resources: cierra el descriptor de archivo aunque ocurra un error I/O
         try (BufferedWriter escritor = new BufferedWriter(
                 new FileWriter(archivo, StandardCharsets.UTF_8))) {
 
-            // 1. Encabezado
-            escritor.write("# Señal: " + nombreSenal);
-            escritor.newLine();
-            escritor.write("# Formato: Valor vs. Tiempo");
-            escritor.newLine();
-            escritor.write("# Muestras: " + muestras.size());
-            escritor.newLine();
-            escritor.write("Tiempo(s)\tValor(" + unidad + ")");
+            escritor.write(ENCABEZADO);
             escritor.newLine();
 
-            // 2. Una línea por muestra con punto decimal estadounidense
+            // Locale.US garantiza punto decimal (ej. 2.5000 en lugar de 2,5000)
             for (double[] punto : muestras) {
-                escritor.write(String.format(Locale.US, "%.3f\t%.4f", punto[0], punto[1]));
+                escritor.write(String.format(Locale.US, formatoFila, punto[0], punto[1]));
                 escritor.newLine();
             }
         }
         return muestras.size();
+    }
+
+    /**
+     * Método puente de compatibilidad que redirige al formato tabular estricto
+     * de la Tarea #25.
+     */
+    public static int guardarValorVsTiempo(List<double[]> muestras, File archivo,
+            String nombreSenal, String unidad) throws IOException {
+        int decimales = "0/1".equals(unidad) ? DECIMALES_DIGITAL : DECIMALES_ANALOGICA;
+        return guardarTiempoDato(muestras, archivo, decimales);
     }
 }

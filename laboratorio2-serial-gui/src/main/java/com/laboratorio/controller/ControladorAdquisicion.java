@@ -21,11 +21,13 @@ import javax.swing.Timer;
 import javax.swing.filechooser.FileNameExtensionFilter;
 
 /**
- * Controlador principal de la arquitectura MVC para el Laboratorio 2. Integra
- * la adquisición serial asíncrona (SerialCommunicationManager / jSerialComm)
- * con la visualización multicanal en JFreeChart (Tarea #21), el telecomando de
- * 4 LEDs (Tarea #22), el cambio dinámico de Ts (Tarea #23) y la persistencia
- * tabular (HU-06).
+ * Controlador principal de la arquitectura MVC para el Laboratorio 2. Unifica:
+ * - Tarea #21 (HU-05): Vinculación de selectores de canales analógicos (0..7) y
+ * digitales (0..3) con el flujo de telemetría serial (0x7A 0x7B ... 0x7C). -
+ * Tarea #22 (HU-05): Conmutación de 4 salidas digitales (LEDs) con comando 0xAA
+ * 0x01. - Tarea #23 (HU-05): Validación y envío de nuevo periodo Ts con comando
+ * 0xAA 0x02. - Tarea #25 (HU-06): Exportación tabular estricta (Tiempo\tDato)
+ * mediante EscritorArchivo.
  */
 public class ControladorAdquisicion {
 
@@ -33,7 +35,7 @@ public class ControladorAdquisicion {
     private final Data modelo;
     private final SerialCommunicationManager gestorSerial;
 
-    // Timer de respaldo para simulación local cuando el puerto COM está desconectado
+    // Timer de respaldo para simulación local únicamente cuando el puerto COM está desconectado
     private Timer timerMuestreoLocal;
     private int periodoMuestreoMs = 100; // Ts inicial: 100 ms
     private long contadorTicks = 0;
@@ -49,7 +51,7 @@ public class ControladorAdquisicion {
     private int canalAnalogicoActivo = 0;
     private int canalDigitalActivo = 0;
 
-    // Nombres de canales para modo serial (8 ADC y 4 DIP-Switch en PD4..PD7 del ATmega328P)
+    // Etiquetas de los canales físicos del ATmega328P en Proteus (Tarea #21)
     private static final String[] NOMBRES_ADC_SERIAL = {
         "Canal ADC 1 (A0 - Pot 1)", "Canal ADC 2 (A1 - Pot 2)",
         "Canal ADC 3 (A2 - Pot 3)", "Canal ADC 4 (A3 - Pot 4)",
@@ -63,7 +65,7 @@ public class ControladorAdquisicion {
         "Entrada Digital 4 (DSW1-4 / Pin PD7)"
     };
 
-    // Búferes sincronizados en memoria para exportación (Tiempo\tDato)
+    // Búferes sincronizados en memoria para exportación tabular (Tiempo\tDato)
     private final List<double[]> bufferAnalogicoActivo = Collections.synchronizedList(new ArrayList<>());
     private final List<double[]> bufferDigitalActivo = Collections.synchronizedList(new ArrayList<>());
 
@@ -100,13 +102,14 @@ public class ControladorAdquisicion {
         vista.montarGraficaAnalogica(this.graficaAnalogica);
         vista.montarGraficaDigital(this.graficaDigital);
 
+        // Poblar combos con los canales del enlace serial
         vista.cargarNombresCanales(NOMBRES_ADC_SERIAL, NOMBRES_DIP_SERIAL);
         vista.setTiempoMuestreoActual(this.periodoMuestreoMs);
 
         graficaAnalogica.cambiarTitulo(NOMBRES_ADC_SERIAL[canalAnalogicoActivo]);
         graficaDigital.cambiarTitulo(NOMBRES_DIP_SERIAL[canalDigitalActivo]);
 
-        // Estado inicial de los 4 LEDs
+        // Estado inicial de los 4 LEDs de salida
         SalidasDigitales salidas = modelo.getSalidas();
         for (int i = 0; i < NUM_SALIDAS; i++) {
             IndicadorLed led = vista.getLedSalida(i);
@@ -115,7 +118,7 @@ public class ControladorAdquisicion {
             }
         }
 
-        // Disparador del modelo (Tarea #22): actualiza LED visual y envía trama 0xAA 0x01
+        // Disparador del modelo (Tarea #22): actualiza LED visual y despacha trama 0xAA 0x01 si está conectado
         salidas.agregarDisparador((canal, estado, tiempo) -> {
             IndicadorLed led = vista.getLedSalida(canal);
             if (led != null) {
@@ -127,7 +130,6 @@ public class ControladorAdquisicion {
             System.out.printf(">> [Actuador] Salida D%d -> %s%n",
                     (canal + 1), (estado ? "1 (ON)" : "0 (OFF)"));
 
-            // Despacho automático de telecomando hacia el microcontrolador (HU-05 / Tarea #18 y #22)
             if (gestorSerial.isConectado()) {
                 try {
                     boolean[] estadosActuales = salidas.getEstados();
@@ -143,7 +145,7 @@ public class ControladorAdquisicion {
         timerMuestreoLocal = new Timer(Data.PERIODO_ANALOGICO_MS, new ActionListener() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                // Solo genera datos sintéticos si NO hay conexión serial activa
+                // Solo opera como respaldo si el puerto serial NO está conectado
                 if (!gestorSerial.isConectado()) {
                     ejecutarCicloMuestreoSintetico();
                 }
@@ -151,11 +153,12 @@ public class ControladorAdquisicion {
         });
     }
 
+    // =========================================================================
+    // TAREA #21: ENLACE DE TELEMETRÍA SERIAL CON LIENZOS GRAFICATIEMPO
+    // =========================================================================
     /**
-     * Tarea #21: Configura el listener asíncrono de jSerialComm (HU-04 /
-     * HU-05). Cada vez que el microcontrolador envía [0x7A, 0x7B, Digital,
-     * ADC0..7, 0x7C], se desempaqueta en segundo plano y se publica en el EDT
-     * mediante invokeLater.
+     * Escucha las tramas [0x7A, 0x7B, Digital, ADC0..7, 0x7C] validadas por
+     * SerialCommunicationManager y las publica en el EDT de Swing.
      */
     private void configurarRecepcionSerialAsincrona() {
         gestorSerial.setTramaRecibidaListener((TramaTelemetria trama) -> {
@@ -163,16 +166,20 @@ public class ControladorAdquisicion {
         });
     }
 
+    /**
+     * Deserializa el canal analógico y digital actualmente seleccionados en los
+     * JComboBox y refresca ambos lienzos de GraficaTiempo.
+     */
     private void procesarTramaSerialEnEdt(TramaTelemetria trama) {
         double tActual = this.tiempoSerialSegundos;
         this.tiempoSerialSegundos += (this.periodoMuestreoMs / 1000.0);
 
-        // 1. Extraer voltaje escalado (0.00 V a 5.00 V) del canal analógico seleccionado
+        // 1. Extraer voltaje escalado (0.00 V a 5.00 V) del canal analógico activo (0..7)
         double vAnalogico = trama.getVoltajesAnalogicos()[canalAnalogicoActivo];
         graficaAnalogica.agregarPunto(tActual, vAnalogico);
         bufferAnalogicoActivo.add(new double[]{tActual, vAnalogico});
 
-        // 2. Extraer nivel lógico (0 o 1) del DIP-Switch seleccionado
+        // 2. Extraer nivel lógico (0 o 1) del interruptor digital activo (0..3)
         int vDigital = trama.getEstadosDigitales()[canalDigitalActivo];
         graficaDigital.agregarPunto(tActual, vDigital);
         bufferDigitalActivo.add(new double[]{tActual, (double) vDigital});
@@ -196,13 +203,13 @@ public class ControladorAdquisicion {
     }
 
     private void conectarEventos() {
-        // 1. Botón Refrescar puertos COM (Tarea #15)
+        // 1. Botón Refrescar puertos COM
         vista.addListenerRefrescarPuertos(e -> refrescarListaPuertosCom());
 
-        // 2. Botón Conectar / Desconectar puerto serial (Tarea #16)
+        // 2. Botón Conectar / Desconectar puerto serial
         vista.addListenerConectarSerial(e -> alternarConexionSerial());
 
-        // 3. Tarea #21: Conmutación de canal analógico (0 a 7)
+        // 3. Tarea #21: Selector de canal analógico (0 a 7) conectado al flujo serial
         vista.addListenerCanalAnalogico(e -> {
             int nuevoCanal = vista.getCanalAnalogico();
             if (nuevoCanal >= 0 && nuevoCanal < Data.NUM_ANALOGICAS && nuevoCanal != canalAnalogicoActivo) {
@@ -213,7 +220,7 @@ public class ControladorAdquisicion {
             }
         });
 
-        // 4. Tarea #21: Conmutación de canal digital (0 a 3)
+        // 4. Tarea #21: Selector de canal digital (0 a 3) conectado al flujo serial
         vista.addListenerCanalDigital(e -> {
             int nuevoCanal = vista.getCanalDigital();
             if (nuevoCanal >= 0 && nuevoCanal < Data.NUM_DIGITALES && nuevoCanal != canalDigitalActivo) {
@@ -230,7 +237,7 @@ public class ControladorAdquisicion {
             actualizarPeriodo(textoEntrada);
         });
 
-        // 6. Exportación de datos analógicos y digitales a disco (Tiempo\tDato)
+        // 6. Tarea #25: Exportación de datos analógicos y digitales a disco (Tiempo\tDato)
         vista.addListenerGuardarAnalogica(e -> exportarDatosCanalAnalogico());
         vista.addListenerGuardarDigital(e -> exportarDatosCanalDigital());
 
@@ -269,17 +276,17 @@ public class ControladorAdquisicion {
         } else {
             String puerto = vista.getPuertoSeleccionado();
             try {
-                detenerAdquisicion(); // Pausa el generador sintético de la Práctica 1
+                detenerAdquisicion(); // Detiene el generador de la Práctica 1
                 gestorSerial.conectar(puerto);
 
-                // Reiniciar gráficas y reloj serial para mostrar únicamente telemetría real
+                // Reiniciar gráficas y reloj serial para mostrar exclusivamente telemetría de Proteus
                 this.tiempoSerialSegundos = 0.0;
                 this.graficaAnalogica.limpiar();
                 this.graficaDigital.limpiar();
                 limpiarBufferAnalogico();
                 limpiarBufferDigital();
 
-                // Sincronizar Ts actual e iniciar flujo en el microcontrolador
+                // Sincronizar Ts actual, estado de LEDs e iniciar transmisión en el ATmega328P
                 gestorSerial.enviarComandoMuestreo(this.periodoMuestreoMs);
                 gestorSerial.enviarComandoLeds(modelo.getSalidas().getEstados());
                 gestorSerial.enviarComandoEstadoFlujo(true);
@@ -331,7 +338,6 @@ public class ControladorAdquisicion {
                 modelo.setPeriodoMuestreoMs(nuevoTs);
             }
 
-            // Si el enlace serial está activo, envía la trama [0xAA, 0x02, MSB, LSB, 0x55]
             if (gestorSerial.isConectado()) {
                 try {
                     gestorSerial.enviarComandoMuestreo(nuevoTs);
@@ -361,7 +367,7 @@ public class ControladorAdquisicion {
     }
 
     // =========================================================================
-    // PERSISTENCIA Y EXPORTACIÓN A DISCO (HU-06 - Tiempo\tDato)
+    // PERSISTENCIA Y EXPORTACIÓN A DISCO (HU-06 / TAREA #25 - Tiempo\tDato)
     // =========================================================================
     private void exportarDatosCanalAnalogico() {
         List<double[]> datos = graficaAnalogica.getPuntosVisibles();
@@ -376,11 +382,11 @@ public class ControladorAdquisicion {
         File archivo = solicitarRutaGuardado("Exportar Señal Analógica a Archivo");
         if (archivo != null) {
             try {
-                int total = EscritorArchivo.guardarValorVsTiempo(
+                // Tarea #25: dos columnas estrictas Tiempo<TAB>Dato (4 decimales)
+                int total = EscritorArchivo.guardarTiempoDato(
                         datos,
                         archivo,
-                        graficaAnalogica.getDescripcionVisible(),
-                        "V"
+                        EscritorArchivo.DECIMALES_ANALOGICA
                 );
                 JOptionPane.showMessageDialog(vista,
                         "Archivo analógico guardado con " + total + " muestras:\n" + archivo.getAbsolutePath(),
@@ -408,11 +414,11 @@ public class ControladorAdquisicion {
         File archivo = solicitarRutaGuardado("Exportar Señal Digital a Archivo");
         if (archivo != null) {
             try {
-                int total = EscritorArchivo.guardarValorVsTiempo(
+                // Tarea #25: dos columnas estrictas Tiempo<TAB>Dato (dato entero 0 o 1)
+                int total = EscritorArchivo.guardarTiempoDato(
                         datos,
                         archivo,
-                        graficaDigital.getDescripcionVisible(),
-                        "0/1"
+                        EscritorArchivo.DECIMALES_DIGITAL
                 );
                 JOptionPane.showMessageDialog(vista,
                         "Archivo digital guardado con " + total + " muestras:\n" + archivo.getAbsolutePath(),
