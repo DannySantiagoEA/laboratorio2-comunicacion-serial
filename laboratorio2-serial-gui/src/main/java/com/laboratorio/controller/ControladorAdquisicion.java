@@ -27,7 +27,8 @@ import javax.swing.filechooser.FileNameExtensionFilter;
  * Tarea #22 (HU-05): Conmutación de 4 salidas digitales (LEDs) con comando 0xAA
  * 0x01. - Tarea #23 (HU-05): Validación y envío de nuevo periodo Ts con comando
  * 0xAA 0x02. - Tarea #25 (HU-06): Exportación tabular estricta (Tiempo\tDato)
- * mediante EscritorArchivo.
+ * mediante EscritorArchivo. - Selector de baudios de VentanaPrincipal
+ * (getBaudRateSeleccionado).
  */
 public class ControladorAdquisicion {
 
@@ -275,9 +276,10 @@ public class ControladorAdquisicion {
             iniciarAdquisicion();
         } else {
             String puerto = vista.getPuertoSeleccionado();
+            int baudios = vista.getBaudRateSeleccionado();
             try {
                 detenerAdquisicion(); // Detiene el generador de la Práctica 1
-                gestorSerial.conectar(puerto);
+                gestorSerial.conectar(puerto, baudios);
 
                 // Reiniciar gráficas y reloj serial para mostrar exclusivamente telemetría de Proteus
                 this.tiempoSerialSegundos = 0.0;
@@ -292,7 +294,7 @@ public class ControladorAdquisicion {
                 gestorSerial.enviarComandoEstadoFlujo(true);
 
                 vista.actualizarEstadoConexionSerial(true,
-                        "Conectado a " + puerto + " (9600 bps, 8-N-1 | Recibiendo telemetría)");
+                        "Conectado a " + puerto + " (" + baudios + " bps, 8-N-1 | Recibiendo telemetría)");
             } catch (SerialConnectionException ex) {
                 vista.actualizarEstadoConexionSerial(false, "Error en " + puerto + " (Modo Simulación Local)");
                 JOptionPane.showMessageDialog(

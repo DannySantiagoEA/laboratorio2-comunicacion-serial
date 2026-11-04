@@ -28,11 +28,16 @@ public class VentanaPrincipal extends javax.swing.JFrame {
     // ===================== ATRIBUTOS DE ACTUADORES (TAREA #22) =====================
     private final IndicadorLed[] ledsSalidas = new IndicadorLed[4];
     private final JToggleButton[] botonesSalidas = new JToggleButton[4];
+
+    // Velocidades que ofrece el selector. Deben coincidir con el firmware y con el COMPIM.
+    private static final Integer[] BAUDIOS_DISPONIBLES = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200};
+    private static final int BAUDIOS_POR_DEFECTO = 9600;
     private JPanel panelContenedorActuadores;
 
     // ===================== ATRIBUTOS DE ENLACE SERIAL (HU-01 / HU-05) =====================
     private JPanel panelConexionSerial;
     private JComboBox<String> comboPuertosCom;
+    private JComboBox<Integer> comboBaudios;
     private JButton btnRefrescarPuertos;
     private JButton btnConectarSerial;
     private IndicadorLed ledEstadoSerial;
@@ -45,6 +50,7 @@ public class VentanaPrincipal extends javax.swing.JFrame {
         setTiempoMuestreoActual(100);
         Tiempo_muestreo_nuevo.setText("100");
 
+        hacerDisenoEscalable();          // las gráficas crecen con la ventana
         inicializarPanelConexionSerial();
         inicializarModuloActuadores();
 
@@ -101,6 +107,69 @@ public class VentanaPrincipal extends javax.swing.JFrame {
         montarEn(jLayeredPane6, grafica);
     }
 
+    // ===================== DISEÑO ESCALABLE (la ventana se puede maximizar) =====================
+    private void hacerDisenoEscalable() {
+        JPanel colAnalogica = crearColumnaSenal(jLabel1, Selector_analogo, jLayeredPane1, Button_almacenar_analoga);
+        JPanel colDigital = crearColumnaSenal(jLabel3, Selector_digital, jLayeredPane6, Button_almacenar_digital);
+
+        JPanel graficas = new JPanel(new GridLayout(1, 2, 12, 0));
+        graficas.setOpaque(false);
+        graficas.add(colAnalogica);
+        graficas.add(colDigital);
+
+        // Fila de tiempo de muestreo
+        Tiempo_muestreo_actual.setPreferredSize(new Dimension(75, 26));
+        Tiempo_muestreo_nuevo.setPreferredSize(new Dimension(75, 26));
+
+        JPanel cabeceraMuestreo = new JPanel(new BorderLayout(0, 2));
+        cabeceraMuestreo.setOpaque(false);
+        cabeceraMuestreo.add(jLabel5, BorderLayout.NORTH);
+        cabeceraMuestreo.add(jSeparator1, BorderLayout.SOUTH);
+
+        JPanel filaMuestreo = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 4));
+        filaMuestreo.setOpaque(false);
+        filaMuestreo.add(jLabel4);
+        filaMuestreo.add(Tiempo_muestreo_actual);
+        filaMuestreo.add(jLabel7);
+        filaMuestreo.add(Tiempo_muestreo_nuevo);
+        filaMuestreo.add(Button_nuevo_tiempo_muestreo);
+
+        JPanel muestreo = new JPanel(new BorderLayout());
+        muestreo.setOpaque(false);
+        muestreo.add(cabeceraMuestreo, BorderLayout.NORTH);
+        muestreo.add(filaMuestreo, BorderLayout.CENTER);
+
+        // Se reemplazan los GroupLayout de tamaño fijo
+        jPanel4.removeAll();
+        jPanel4.setLayout(new BorderLayout(0, 8));
+        jPanel4.setBorder(BorderFactory.createEmptyBorder(10, 10, 6, 10));
+        jPanel4.add(graficas, BorderLayout.CENTER);
+        jPanel4.add(muestreo, BorderLayout.SOUTH);
+
+        jPanel1.removeAll();
+        jPanel1.setLayout(new BorderLayout());
+        jPanel1.add(jPanel4, BorderLayout.CENTER);
+    }
+
+    private JPanel crearColumnaSenal(JLabel etiqueta, JComboBox<String> selector,
+            Component grafica, JButton botonGuardar) {
+        JPanel fila = new JPanel(new BorderLayout(8, 0));
+        fila.setOpaque(false);
+        fila.add(etiqueta, BorderLayout.WEST);
+        fila.add(selector, BorderLayout.CENTER);
+
+        JPanel pie = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 4));
+        pie.setOpaque(false);
+        pie.add(botonGuardar);
+
+        JPanel columna = new JPanel(new BorderLayout(0, 8));
+        columna.setOpaque(false);
+        columna.add(fila, BorderLayout.NORTH);
+        columna.add(grafica, BorderLayout.CENTER);   // esta es la que se estira
+        columna.add(pie, BorderLayout.SOUTH);
+        return columna;
+    }
+
     // ===================== INTERNOS Y ENLACE SERIAL =====================
     private void montarEn(JLayeredPane contenedor, Component grafica) {
         contenedor.removeAll();
@@ -111,17 +180,26 @@ public class VentanaPrincipal extends javax.swing.JFrame {
     }
 
     private void inicializarPanelConexionSerial() {
-        panelConexionSerial = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
+        panelConexionSerial = new JPanel(new BorderLayout(10, 0));
+        JPanel controlesSerial = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
+        controlesSerial.setOpaque(false);
         panelConexionSerial.setBackground(new Color(215, 222, 228));
         panelConexionSerial.setBorder(BorderFactory.createTitledBorder(
                 BorderFactory.createEtchedBorder(),
-                "Enlace Serial RS-232 (jSerialComm - 9600 bps, 8-N-1)"));
+                "Enlace Serial RS-232 (jSerialComm - 8-N-1)"));
 
         JLabel lblPuerto = new JLabel("Puerto COM:");
         lblPuerto.setFont(new Font("Segoe UI", Font.BOLD, 12));
 
         comboPuertosCom = new JComboBox<>(new String[]{"COM2", "COM1"});
         comboPuertosCom.setPreferredSize(new Dimension(100, 26));
+
+        JLabel lblBaudios = new JLabel("Baudios:");
+        lblBaudios.setFont(new Font("Segoe UI", Font.BOLD, 12));
+
+        comboBaudios = new JComboBox<>(BAUDIOS_DISPONIBLES);
+        comboBaudios.setSelectedItem(BAUDIOS_POR_DEFECTO);
+        comboBaudios.setPreferredSize(new Dimension(90, 26));
 
         btnRefrescarPuertos = new JButton("Refrescar");
         btnConectarSerial = new JButton("Conectar");
@@ -133,12 +211,16 @@ public class VentanaPrincipal extends javax.swing.JFrame {
         lblEstadoSerial = new JLabel("Desconectado (Modo Simulación Local)");
         lblEstadoSerial.setFont(new Font("Segoe UI", Font.PLAIN, 12));
 
-        panelConexionSerial.add(lblPuerto);
-        panelConexionSerial.add(comboPuertosCom);
-        panelConexionSerial.add(btnRefrescarPuertos);
-        panelConexionSerial.add(btnConectarSerial);
-        panelConexionSerial.add(ledEstadoSerial);
-        panelConexionSerial.add(lblEstadoSerial);
+        controlesSerial.add(lblPuerto);
+        controlesSerial.add(comboPuertosCom);
+        controlesSerial.add(lblBaudios);
+        controlesSerial.add(comboBaudios);
+        controlesSerial.add(btnRefrescarPuertos);
+        controlesSerial.add(btnConectarSerial);
+        controlesSerial.add(ledEstadoSerial);
+
+        panelConexionSerial.add(controlesSerial, BorderLayout.WEST);
+        panelConexionSerial.add(lblEstadoSerial, BorderLayout.CENTER);
     }
 
     private void inicializarModuloActuadores() {
@@ -147,13 +229,6 @@ public class VentanaPrincipal extends javax.swing.JFrame {
         panelContenedorActuadores.setBorder(BorderFactory.createTitledBorder(
                 BorderFactory.createEtchedBorder(),
                 "Salidas Digitales y Telecontrol de LEDs (0xAA 0x01 ... 0x55)"));
-
-        Color[] coloresLeds = {
-            new Color(0, 220, 90),
-            new Color(255, 190, 0),
-            new Color(240, 45, 45),
-            new Color(30, 144, 255)
-        };
 
         for (int i = 0; i < 4; i++) {
             JPanel celda = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 4));
@@ -193,6 +268,14 @@ public class VentanaPrincipal extends javax.swing.JFrame {
         return sel != null ? sel.toString() : "COM2";
     }
 
+    /**
+     * Baud rate elegido en el selector (por defecto 9600).
+     */
+    public int getBaudRateSeleccionado() {
+        Object sel = comboBaudios.getSelectedItem();
+        return (sel instanceof Integer) ? (Integer) sel : BAUDIOS_POR_DEFECTO;
+    }
+
     public void addListenerRefrescarPuertos(ActionListener l) {
         btnRefrescarPuertos.addActionListener(l);
     }
@@ -204,8 +287,10 @@ public class VentanaPrincipal extends javax.swing.JFrame {
     public void actualizarEstadoConexionSerial(boolean conectado, String mensaje) {
         ledEstadoSerial.setEstado(conectado);
         lblEstadoSerial.setText(mensaje);
+        lblEstadoSerial.setToolTipText(mensaje);   // texto completo al pasar el mouse
         btnConectarSerial.setText(conectado ? "Desconectar" : "Conectar");
         comboPuertosCom.setEnabled(!conectado);
+        comboBaudios.setEnabled(!conectado);
         btnRefrescarPuertos.setEnabled(!conectado);
     }
 
